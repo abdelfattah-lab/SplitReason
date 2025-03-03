@@ -17,14 +17,16 @@ def parse_args():
                         help="The large model to serve via vLLM.")
     parser.add_argument("--big_model_port", type=int, default=8000,
                         help="TCP port for the big model server.")
-    parser.add_argument("--big_model_gpus", type=str, default="0,1,2,3",
+    # parser.add_argument("--big_model_gpus", type=str, default="0,1,2,3",
+    parser.add_argument("--big_model_gpus", type=str, default="0,1",
                         help="Comma-separated GPU IDs for the big model (env-based).")
 
     parser.add_argument("--small_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
                         help="The small draft model to serve (vLLM).")
     parser.add_argument("--small_model_port", type=int, default=8001,
                         help="TCP port for the draft model server.")
-    parser.add_argument("--small_model_gpus", type=str, default="4,5",
+    # parser.add_argument("--small_model_gpus", type=str, default="4,5",
+    parser.add_argument("--small_model_gpus", type=str, default="2",
                         help="Comma-separated GPU IDs for the small model (env-based).")
 
     parser.add_argument("--thinking_n_ignore", type=int, default=2,
@@ -33,15 +35,14 @@ def parse_args():
                         help="Number of parallel drafts to generate from the small model.")
     parser.add_argument("--small_first", action="store_true",
                         help="If True, use the small model for the initial CoT, otherwise use big model.")
+    parser.add_argument("--draft_propose_ignore_str", action="store_true",
+                        help="If True, the draft model proposes an 'Ignore String' to the big model.")
     # parser.add_argument("--question", type=str, default="How many rs in strawberry?",
                         # help="Test question to send to big model and small model.")
     parser.add_argument("--question", type=str, default="Jen enters a lottery by picking $4$ distinct numbers from $S=\{1,2,3,\cdots,9,10\}.$ $4$ numbers are randomly chosen from $S.$ She wins a prize if at least two of her numbers were $2$ of the randomly chosen numbers, and wins the grand prize if all four of her numbers were the randomly chosen numbers. The probability of her winning the grand prize given that she won a prize is $\\tfrac{m}{n}$ where $m$ and $n$ are relatively prime positive integers. Find $m+n$.", help="Question to answer")
 
     return parser.parse_args()
 
-################################################################################
-# Helper: Wait until server is up
-################################################################################
 def wait_for_server(url, timeout=600.0):
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -54,67 +55,50 @@ def wait_for_server(url, timeout=600.0):
         time.sleep(1)
     return False
 
-################################################################################
-# Run the big model server (vLLM)
-################################################################################
 def launch_big_model_vllm(big_model, port, gpu_ids):
-    """
-    Launch the big model using vLLM's "serve" CLI command in a separate process.
-    We set CUDA_VISIBLE_DEVICES to limit which GPUs it uses.
-    """
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
+    tp_size = len(gpu_ids.split(","))
 
     cmd = [
         "vllm", "serve",
         big_model,
         "--port", str(port),
         "--trust-remote-code",
-        "--tensor-parallel-size", "4",
+        "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768"
     ]
     print(f"Launching big model server on port {port} using GPUs {gpu_ids}")
     return subprocess.Popen(cmd, env=env)
 
-################################################################################
-# Run the small model server with vLLM
-################################################################################
 def launch_small_model(model_name, port, gpu_ids):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
+    tp_size = len(gpu_ids.split(","))
 
     cmd = [
         "vllm", "serve",
         model_name,
         "--port", str(port),
         "--trust-remote-code",
-        "--tensor-parallel-size", "2",
+        "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768"
     ]
     print(f"Launching small model (vLLM) server on port {port} using GPUs {gpu_ids}")
     return subprocess.Popen(cmd, env=env)
 
-################################################################################
-# Query models (vLLM) via /v1/completions endpoint
-################################################################################
-def generate_text_vllm(prompt, port=8000, temperature=0.0, max_tokens=128, model="my-model"):
+def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model"):
     url = f"http://localhost:{port}/v1/completions"
     payload = {
-        "model": model,             # REQUIRED for OpenAI-style endpoint
+        "model": model,
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature
-        # add top_p, stop, etc. if desired
     }
     resp = requests.post(url, json=payload)
     resp.raise_for_status()
-    # OpenAI-like response has "choices", each with "text"
-    # return resp.json()["choices"][0]["text"]
     return resp.json()
 
-################################################################################
-# Extract partial chain-of-thought from a raw model response
-################################################################################
 def extract_cot(raw_text, think_suffix, fallback_suffixes=()):
     """
     Attempt to split the model's reply to isolate the chain-of-thought portion.
@@ -122,48 +106,29 @@ def extract_cot(raw_text, think_suffix, fallback_suffixes=()):
     Otherwise, if we find any fallback in fallback_suffixes, we do the same.
     If nothing is found, return the entire text.
     """
-    # First try explicit suffix:
     if think_suffix and think_suffix in raw_text:
         return raw_text.split(think_suffix)[0]
 
-    # Otherwise try fallback suffixes:
     for fb in fallback_suffixes:
         if fb in raw_text:
             return raw_text.split(fb)[0]
 
-    # If none found, return raw_text
     return raw_text
 
-################################################################################
-# Scoring function: trivial (based on length)
-# In reality, you might do a log-likelihood or some other measure
-################################################################################
 def score_with_big_model(draft_text, big_model, big_model_port):
-    """
-    Placeholder scoring function that returns length of the text as the "score".
-    The idea: we might do a logprob check or something else in a real scenario.
-    """
     # For now, we simply return the length: longer might be "better"
     return len(draft_text)
 
 def record_usage(usage_data, model_name, think_iter, draft_version, usage_dict):
-    """
-    Append usage stats (prompt & completion tokens) to usage_data list.
-    usage_dict typically looks like:
-      {'prompt_tokens': ..., 'completion_tokens': ..., 'total_tokens': ...}
-    """
     usage_data.append({
         "Model": model_name,
-        "ThinkIter": think_iter,             # which iteration, or "final"
-        "DraftVersion": draft_version,       # which draft # or 0 if none
+        "ThinkIter": think_iter,        
+        "DraftVersion": draft_version,  
         "PromptTokens": usage_dict.get("prompt_tokens", 0),
         "CompletionTokens": usage_dict.get("completion_tokens", 0)
     })
 
 def print_usage_table(usage_data):
-    """
-    Pretty-print the usage table.
-    """
     rows = []
     for entry in usage_data:
         rows.append([
@@ -180,16 +145,14 @@ def print_usage_table(usage_data):
         tablefmt="grid"
     ))
 
-################################################################################
-# Main logic
-################################################################################
 def main():
+    draft_logs = "draft_logs"
+    if not os.path.exists(draft_logs):
+        os.makedirs(draft_logs)
+
     args = parse_args()
 
     usage_data = []
-    ############################################################################
-    # 1) Launch the big model server (vLLM) in the background
-    ############################################################################
     big_model_proc = launch_big_model_vllm(args.big_model,
                                            args.big_model_port,
                                            args.big_model_gpus)
@@ -200,9 +163,6 @@ def main():
         sys.exit(1)
     print("Big model server is up.")
 
-    ############################################################################
-    # 2) Launch the small model server (vLLM) in the background
-    ############################################################################
     small_model_proc = launch_small_model(args.small_model,
                                           args.small_model_port,
                                           args.small_model_gpus)
@@ -214,26 +174,37 @@ def main():
         sys.exit(1)
     print("Small model server is up.")
 
-    ############################################################################
-    # 3) We can now perform multi-step “chain-of-thought” with drafting
-    ############################################################################
-
     # Basic prompt for user query
     base_prompt = f"<|user|>\n{args.question}\n<|assistant|>\n"
-
     # Big model think tokens
-    big_model_think_prefix = "<|im_start|>think\n"
-    big_model_think_suffix = "<|im_start|>answer"
-    fallback_suffixes = ("\nanswer", "\nAnswer", "**Final Answer**", "\nFinal Answer")
+    if "simplescaling" in args.big_model:
+        big_model_think_prefix = "<|im_start|>think\n"
+        big_model_think_suffix = "<|im_start|>answer"
+    elif "deepseek-ai" in args.big_model:
+        big_model_think_prefix = "<think>\n"
+        big_model_think_suffix = "\n</think>"
+    else:
+        raise ValueError("Unknown big model type -- it must be a 'thinking' model.")
 
     # Small model think tokens
-    small_model_think_prefix = "<think>\n"
-    small_model_think_suffix = "\n</think>"
+    if "simplescaling" in args.small_model:
+        small_model_think_prefix = "<|im_start|>think\n"
+        small_model_think_suffix = "<|im_start|>answer"
+    elif "deepseek-ai" in args.small_model:
+        small_model_think_prefix = "<think>\n"
+        small_model_think_suffix = "\n</think>"
+    else: # Drafting model might not be a 'thinking' model
+        small_model_think_prefix = "\n"
+        small_model_think_suffix = "\n"
 
+    wait_str = "\nWait"
+
+    fallback_suffixes = ("\nanswer", "\nAnswer", "**Final Answer**", "\nFinal Answer", "<|answer|>")
     # We'll accumulate the partial CoT across iterations
     # At each iteration, we either generate from big or small, parse the CoT,
     # then do drafting with small model, pick best draft, append "Wait".
-    cot_accumulator = ""  # This will store the chain-of-thought across iterations
+
+    cot_accumulator = ""
 
     for i in range(args.thinking_n_ignore):
         print(f"\n=== Iteration {i+1}/{args.thinking_n_ignore} ===")
@@ -254,7 +225,10 @@ def main():
 
         # Full prompt for this iteration includes the partial CoT so far
         # plus the new "think" prefix.
-        iteration_prompt = base_prompt + cot_accumulator + model_think_prefix
+        if i == 0: # No CoT yet, so we start fresh and start the 'thinking' mode.
+            iteration_prompt = base_prompt + model_think_prefix
+        else: # No need to add think prefix if already in thinking mode.
+            iteration_prompt = base_prompt + cot_accumulator
 
         print(f"Prompt to {model_name}:\n{iteration_prompt}\n---")
 
@@ -262,7 +236,7 @@ def main():
         raw_resp = generate_text_vllm(
             iteration_prompt,
             port=model_port,
-            temperature=0.0,       # or your choice
+            temperature=0.6,
             max_tokens=16384,
             model=model_name
         )
@@ -270,32 +244,45 @@ def main():
             record_usage(usage_data, model_name, think_iter=(i+1), draft_version=0, usage_dict=raw_resp["usage"])
 
         raw_reply = raw_resp["choices"][0]["text"]
-        print(f"[{model_name} raw reply]:\n{raw_reply}\n---")
 
         # Extract chain-of-thought portion from the raw reply
         partial_cot = extract_cot(raw_reply, model_think_suffix, fallback_suffixes)
         print(f"Partial CoT extracted:\n{partial_cot}\n---")
 
-        ########################################################################
-        # Speculative drafting step: produce `drafting_n` variants from small model
-        ########################################################################
-        # We'll build a prompt for the small model that includes this partial CoT
-        # and asks for a refined or re-written version. Then we'll pick the best.
+        write_model_name = model_name.split("/")[-1]
+        with open(f"{draft_logs}/{write_model_name}_iter{i+1}.txt", "w") as f:
+            f.write(iteration_prompt)
+            f.write("\n" + "-" * 80 + "\n")
+            f.write("\n" + "Raw Reply" + "\n")
+            f.write(raw_reply)
+            f.write("\n" + "-" * 80 + "\n")
+            f.write("\n" + "Extracted CoT" + "\n")
+            f.write("\n" + "-" * 80 + "\n")
+            f.write(partial_cot)
+        print(f"[{model_name} raw reply]:\n{raw_reply}\n---")
 
         drafts = []
         if args.drafting_n > 0:
             print(f"Generating {args.drafting_n} draft variants from small model.")
             for d_i in range(args.drafting_n):
-                # A simple “prompt_for_draft”
                 prompt_for_draft = (
-                    f"Below is a partial chain-of-thought:\n"
+                    f"The question asked:\n{args.question}\n"
+                    f"For the solution, we currently have this partial reasoning:\n"
                     f"{partial_cot}\n"
-                    "Rewrite or refine it. Keep all key steps.\n</think>"
+                    f"{small_model_think_prefix}I want to rewrite and refine the above reasoning, preserving all crucial steps "
                 )
+                if args.draft_propose_ignore_str:
+                    prompt_for_draft += (
+                        "Conclude with a leading question that encourages deeper investigation "
+                        "into how to finalize the solution or verify the steps."
+                        f"{small_model_think_suffix}"
+                    )
+                else:
+                    prompt_for_draft += f"{small_model_think_suffix}"
                 raw_draft_resp = generate_text_vllm(
                     prompt_for_draft,
                     port=args.small_model_port,
-                    temperature=0.7,
+                    temperature=0.6,
                     max_tokens=16384,
                     model=args.small_model
                 )
@@ -303,17 +290,19 @@ def main():
                     record_usage(
                         usage_data,
                         args.small_model,
-                        think_iter=(i+1),          # same iteration
-                        draft_version=(d_i+1),     # which draft
+                        think_iter=(i+1),       
+                        draft_version=(d_i+1),  
                         usage_dict=raw_draft_resp["usage"]
                     )
 
                 raw_draft = raw_draft_resp["choices"][0]["text"]
-                # For drafting, we might not strictly need to parse out a think_suffix,
-                # but you could do so if needed. For now, let's keep the raw draft.
+                write_model_name = args.small_model.split("/")[-1]
+                with open(f"{draft_logs}/{write_model_name}_iter{i+1}_draft{d_i+1}.txt", "w") as f:
+                    f.write(prompt_for_draft)
+                    f.write("\n" + "-" * 80 + "\n")
+                    f.write(raw_draft)
                 drafts.append(raw_draft)
 
-            # Score each draft
             best_score = -1e9
             best_draft = drafts[0]
             for d in drafts:
@@ -322,25 +311,15 @@ def main():
                     best_score = s
                     best_draft = d
             print("Selected best draft:\n", best_draft, "\n---")
-            # That best_draft replaces partial_cot
             partial_cot = best_draft
-
-        ########################################################################
-        # Append "Wait" to the selected partial CoT and accumulate
-        ########################################################################
-        cot_accumulator += partial_cot + "\nWait"
-
-    ############################################################################
-    # 4) Final Answer Generation from Big Model
-    ############################################################################
-    # Now we want to produce the final answer. We can do so by prompting the big
-    # model with the entire chain-of-thought we've collected, plus the "answer"
-    # token.
+        
+        if args.draft_propose_ignore_str:
+            cot_accumulator += partial_cot
+        else:
+            cot_accumulator += partial_cot + wait_str
 
     final_prompt = (
         base_prompt + cot_accumulator
-        # Optionally: big_model_think_prefix (if you want another think step) ?
-        # For now, we just proceed
         # + "<|im_start|>answer\n"
     )
     print("\n=== Final prompt to big model ===\n", final_prompt, "\n---")
@@ -348,7 +327,7 @@ def main():
     final_resp = generate_text_vllm(
         final_prompt,
         port=args.big_model_port,
-        temperature=0.0,
+        temperature=0.6,
         max_tokens=1024,
         model=args.big_model
     )
@@ -356,15 +335,15 @@ def main():
         record_usage(usage_data, args.big_model, think_iter="final", draft_version=0, usage_dict=final_resp["usage"])
 
     final_reply = final_resp["choices"][0]["text"]
+    write_model_name = args.big_model.split("/")[-1]
+    with open(f"{draft_logs}/final_reply_{write_model_name}.txt", "w") as f:
+        f.write(final_prompt)
+        f.write("\n" + "-" * 80 + "\n")
+        f.write(final_reply)
     print("[Big Model Final Reply]:\n", final_reply)
 
-    # You might want to parse out the answer from that final reply as well,
-    # but that depends on your usage.
 
     print_usage_table(usage_data)
-    ############################################################################
-    # 5) Shut down servers (when done)
-    ############################################################################
     print("Terminating servers.")
     small_model_proc.send_signal(signal.SIGTERM)
     big_model_proc.send_signal(signal.SIGTERM)
