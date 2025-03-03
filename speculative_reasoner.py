@@ -33,8 +33,10 @@ def parse_args():
                         help="Number of parallel drafts to generate from the small model.")
     parser.add_argument("--small_first", action="store_true",
                         help="If True, use the small model for the initial CoT, otherwise use big model.")
-    parser.add_argument("--question", type=str, default="How many rs in strawberry?",
-                        help="Test question to send to big model and small model.")
+    # parser.add_argument("--question", type=str, default="How many rs in strawberry?",
+                        # help="Test question to send to big model and small model.")
+    parser.add_argument("--question", type=str, default="Jen enters a lottery by picking $4$ distinct numbers from $S=\{1,2,3,\cdots,9,10\}.$ $4$ numbers are randomly chosen from $S.$ She wins a prize if at least two of her numbers were $2$ of the randomly chosen numbers, and wins the grand prize if all four of her numbers were the randomly chosen numbers. The probability of her winning the grand prize given that she won a prize is $\\tfrac{m}{n}$ where $m$ and $n$ are relatively prime positive integers. Find $m+n$.", help="Question to answer")
+
     return parser.parse_args()
 
 ################################################################################
@@ -222,7 +224,7 @@ def main():
     # Big model think tokens
     big_model_think_prefix = "<|im_start|>think\n"
     big_model_think_suffix = "<|im_start|>answer"
-    fallback_suffixes = ("\nanswer", "\nAnswer")
+    fallback_suffixes = ("\nanswer", "\nAnswer", "**Final Answer**", "\nFinal Answer")
 
     # Small model think tokens
     small_model_think_prefix = "<think>\n"
@@ -347,7 +349,7 @@ def main():
         final_prompt,
         port=args.big_model_port,
         temperature=0.0,
-        max_tokens=16384,
+        max_tokens=1024,
         model=args.big_model
     )
     if "usage" in final_resp:
@@ -372,4 +374,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
