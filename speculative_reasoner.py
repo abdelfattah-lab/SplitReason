@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--thinking_n_ignore", type=int, default=2,
                         help="Number of chain-of-thought (CoT) iterations to do before final.")
 
-    parser.add_argument("--max_tokens", type=int, default=4096,
+    parser.add_argument("--max_tokens", type=int, default=16384,
                         help="Max generated tokens")
 
     parser.add_argument("--bloat_tokens", type=int, default=0,
