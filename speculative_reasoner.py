@@ -54,6 +54,7 @@ def parse_args():
                         # help="Test question to send to big model and small model.")
     # parser.add_argument("--question", type=str, default="Jen enters a lottery by picking $4$ distinct numbers from $S=\{1,2,3,\cdots,9,10\}.$ $4$ numbers are randomly chosen from $S.$ She wins a prize if at least two of her numbers were $2$ of the randomly chosen numbers, and wins the grand prize if all four of her numbers were the randomly chosen numbers. The probability of her winning the grand prize given that she won a prize is $\\tfrac{m}{n}$ where $m$ and $n$ are relatively prime positive integers. Find $m+n$.", help="Question to answer")
     parser.add_argument("--question", type=str, default="Two identical rectangular crates are packed with cylindrical pipes, using different methods. Each pipe has diameter $10\text{ cm}.$ A side view of the first four rows of each of the two different methods of packing is shown below.\n\n[asy]\ndraw(circle((1,1),1),black+linewidth(1));\ndraw(circle((3,1),1),black+linewidth(1));\ndraw(circle((5,1),1),black+linewidth(1));\ndraw(circle((7,1),1),black+linewidth(1));\ndraw(circle((9,1),1),black+linewidth(1));\ndraw(circle((11,1),1),black+linewidth(1));\ndraw(circle((13,1),1),black+linewidth(1));\ndraw(circle((15,1),1),black+linewidth(1));\ndraw(circle((17,1),1),black+linewidth(1));\ndraw(circle((19,1),1),black+linewidth(1));\ndraw(circle((1,3),1),black+linewidth(1));\ndraw(circle((3,3),1),black+linewidth(1));\ndraw(circle((5,3),1),black+linewidth(1));\ndraw(circle((7,3),1),black+linewidth(1));\ndraw(circle((9,3),1),black+linewidth(1));\ndraw(circle((11,3),1),black+linewidth(1));\ndraw(circle((13,3),1),black+linewidth(1));\ndraw(circle((15,3),1),black+linewidth(1));\ndraw(circle((17,3),1),black+linewidth(1));\ndraw(circle((19,3),1),black+linewidth(1));\ndraw(circle((1,5),1),black+linewidth(1));\ndraw(circle((3,5),1),black+linewidth(1));\ndraw(circle((5,5),1),black+linewidth(1));\ndraw(circle((7,5),1),black+linewidth(1));\ndraw(circle((9,5),1),black+linewidth(1));\ndraw(circle((11,5),1),black+linewidth(1));\ndraw(circle((13,5),1),black+linewidth(1));\ndraw(circle((15,5),1),black+linewidth(1));\ndraw(circle((17,5),1),black+linewidth(1));\ndraw(circle((19,5),1),black+linewidth(1));\ndraw(circle((1,7),1),black+linewidth(1));\ndraw(circle((3,7),1),black+linewidth(1));\ndraw(circle((5,7),1),black+linewidth(1));\ndraw(circle((7,7),1),black+linewidth(1));\ndraw(circle((9,7),1),black+linewidth(1));\ndraw(circle((11,7),1),black+linewidth(1));\ndraw(circle((13,7),1),black+linewidth(1));\ndraw(circle((15,7),1),black+linewidth(1));\ndraw(circle((17,7),1),black+linewidth(1));\ndraw(circle((19,7),1),black+linewidth(1));\ndraw((0,15)--(0,0)--(20,0)--(20,15),black+linewidth(1));\ndot((10,9));\ndot((10,11));\ndot((10,13));\nlabel('Crate A',(10,0),S);\n[/asy]\n\n[asy]\ndraw(circle((1,1),1),black+linewidth(1));\ndraw(circle((3,1),1),black+linewidth(1));\ndraw(circle((5,1),1),black+linewidth(1));\ndraw(circle((7,1),1),black+linewidth(1));\ndraw(circle((9,1),1),black+linewidth(1));\ndraw(circle((11,1),1),black+linewidth(1));\ndraw(circle((13,1),1),black+linewidth(1));\ndraw(circle((15,1),1),black+linewidth(1));\ndraw(circle((17,1),1),black+linewidth(1));\ndraw(circle((19,1),1),black+linewidth(1));\ndraw(circle((2,2.75),1),black+linewidth(1));\ndraw(circle((4,2.75),1),black+linewidth(1));\ndraw(circle((6,2.75),1),black+linewidth(1));\ndraw(circle((8,2.75),1),black+linewidth(1));\ndraw(circle((10,2.75),1),black+linewidth(1));\ndraw(circle((12,2.75),1),black+linewidth(1));\ndraw(circle((14,2.75),1),black+linewidth(1));\ndraw(circle((16,2.75),1),black+linewidth(1));\ndraw(circle((18,2.75),1),black+linewidth(1));\ndraw(circle((1,4.5),1),black+linewidth(1));\ndraw(circle((3,4.5),1),black+linewidth(1));\ndraw(circle((5,4.5),1),black+linewidth(1));\ndraw(circle((7,4.5),1),black+linewidth(1));\ndraw(circle((9,4.5),1),black+linewidth(1));\ndraw(circle((11,4.5),1),black+linewidth(1));\ndraw(circle((13,4.5),1),black+linewidth(1));\ndraw(circle((15,4.5),1),black+linewidth(1));\ndraw(circle((17,4.5),1),black+linewidth(1));\ndraw(circle((19,4.5),1),black+linewidth(1));\ndraw(circle((2,6.25),1),black+linewidth(1));\ndraw(circle((4,6.25),1),black+linewidth(1));\ndraw(circle((6,6.25),1),black+linewidth(1));\ndraw(circle((8,6.25),1),black+linewidth(1));\ndraw(circle((10,6.25),1),black+linewidth(1));\ndraw(circle((12,6.25),1),black+linewidth(1));\ndraw(circle((14,6.25),1),black+linewidth(1));\ndraw(circle((16,6.25),1),black+linewidth(1));\ndraw(circle((18,6.25),1),black+linewidth(1));\ndraw((0,15)--(0,0)--(20,0)--(20,15),black+linewidth(1));\ndot((10,9));\ndot((10,11));\ndot((10,13));\nlabel('Crate B',(10,0),S);\n[/asy]\n\nThree pipes from Crate $B$ are shown. Determine the height, $h,$ of this pile of $3$ pipes.\n\n[asy]\ndraw(circle((10,10),10),black+linewidth(1));\ndraw(circle((30,10),10),black+linewidth(1));\ndraw(circle((20,27.5),10),black+linewidth(1));\ndraw((50,0)--(50,37.5),black+linewidth(1));\ndraw((49,0)--(51,0),black+linewidth(1));\ndraw((49,37.5)--(51,37.5),black+linewidth(1));\nlabel('$h$',(50,0)--(50,37.5),E);\n[/asy]")
+    parser.add_argument("--terminating_string", type=str, default="\nPut your final answer within \\boxed{}.")
     # parser.add_argument("--question", type=str, default="The wheel shown is spun twice, so that the numbers indicated by the pointer are randomly determined (with each number on the wheel being equally likely). The two numbers determined in this way are recorded. The first number is divided by 4, determining one of the remainders 1,2,3 marking the columns of the checkerboard shown. The second number is divided by 5, determining one of the remainders 1,2,3,4 marking the rows of the checkerboard. Finally, a checker is placed on the square where this column and row meet. What is the probability that the checker is placed on a shaded square of the checkerboard? \n \n[asy] \nunitsize(1cm); \ndraw(Circle((0,0),2),linewidth(0.7)); \ndraw((1.7,1)--(-1.7,-1),linewidth(0.7)); \ndraw((1.7,-1)--(-1.7,1),linewidth(0.7)); \ndraw((0,2)--(0,-2)); \nlabel("1",(0.8,0.5),NW); \nlabel("2",(0.8,-0.5),SW); \nlabel("6",(-0.8,0.5),NE); \nlabel("9",(-0.8,-0.5),SE); \nlabel("3",(-0.7,0),W); \nlabel("7",(0.7,0),E); \ndraw((-2.8,0)--(-2.1,0),Arrow); \nlabel("Pointer",(-2.8,0),W); \nfill((3,0)--(3,1)--(4,1)--(4,0)--cycle,gray(0.7)); \nfill((3,-2)--(3,-1)--(4,-1)--(4,-2)--cycle,gray(0.7)); \nfill((4,1)--(4,2)--(5,2)--(5,1)--cycle,gray(0.7)); \nfill((4,-1)--(4,0)--(5,0)--(5,-1)--cycle,gray(0.7)); \nfill((5,0)--(5,1)--(6,1)--(6,0)--cycle,gray(0.7)); \nfill((5,-2)--(5,-1)--(6,-1)--(6,-2)--cycle,gray(0.7)); \ndraw((3,-2)--(3,2)--(6,2)--(6,-2)--cycle,linewidth(0.7)); \ndraw((3,-1)--(6,-1),linewidth(0.7)); \ndraw((3,0)--(6,0),linewidth(0.7)); \ndraw((3,1)--(6,1),linewidth(0.7)); \ndraw((4,-2)--(4,2),linewidth(0.7)); \ndraw((5,-2)--(5,2),linewidth(0.7)); \nlabel("1",(3.5,-2),S); \nlabel("2",(4.5,-2),S); \nlabel("3",(5.5,-2),S); \nlabel("1",(3,-1.5),W); \nlabel("2",(3,-0.5),W); \nlabel("3",(3,0.5),W); \nlabel("4",(3,1.5),W); \n[/asy]")
     return parser.parse_args()
 
@@ -250,9 +251,6 @@ def main():
     # fallback_suffixes = ("\nanswer", "\nAnswer", "**Final Answer**", "\nFinal Answer", "<|answer|>")
     # Remove fallback suffixes as it caused incorrect CoT cropping (Too early, as each CoT step may have **Final Answer** etc.)
     fallback_suffixes = ()
-    # We'll accumulate the partial CoT across iterations
-    # At each iteration, we either generate from big or small, parse the CoT,
-    # then do drafting with small model, pick best draft, append "Wait".
 
     cot_accumulator = ""
 
@@ -301,13 +299,11 @@ def main():
 
         write_model_name = model_name.split("/")[-1]
         with open(f"{draft_logs}/{write_model_name}_iter{i+1}.txt", "w") as f:
+            f.write("\n" + "-" * 80 + "\n" + "\n" + "Input to LLM" + "\n" + "\n" + "-" * 80 + "\n")
             f.write(iteration_prompt)
-            f.write("\n" + "-" * 80 + "\n")
-            f.write("\n" + "Raw Reply" + "\n")
+            f.write("\n" + "-" * 80 + "\n" + "\n" + "Raw Reply" + "\n" + "\n" + "-" * 80 + "\n")
             f.write(raw_reply)
-            f.write("\n" + "-" * 80 + "\n")
-            f.write("\n" + "Extracted CoT" + "\n")
-            f.write("\n" + "-" * 80 + "\n")
+            f.write("\n" + "-" * 80 + "\n" + "\n" + "Extracted CoT" + "\n" + "\n" + "-" * 80 + "\n")
             f.write(partial_cot)
         print(f"[{model_name} raw reply]:\n{raw_reply}\n---")
 
@@ -319,21 +315,25 @@ def main():
                     prompt_for_draft = (
                         f"The question asked:\n{args.question}\n\n\n\n"
                         f"For the question, we currently have this partial reasoning:\n\n"
-                        f"{cot_accumulator}\n"
-                        f"{small_model_think_prefix}I want to concisely refine the above reasoning, while preserving ALL crucial steps."
+                        f"{cot_accumulator} \t {partial_cot}\n"
+                        f"{small_model_think_prefix}I want to concisely refine the above reasoning, preserving ALL crucial steps."
                     )
                 else:
+                    if len(cot_accumulator) == 0:
+                        cot_inject = "No Partial CoT yet"
+                    else:
+                        cot_inject = cot_accumulator
                     prompt_for_draft = (
                         f"The question asked:\n{args.question}\n\n\n\n"
-                        f"Prior reasoning chain: \n{cot_accumulator}\n\n\n"
-                        f"Most recently, we currently have this partial reasoning:\n\n"
+                        f"Prior reasoning chain: \n{cot_inject}\n\n\n"
+                        f"Most recently, we currently have this **partial reasoning**:\n\n"
                         f"{partial_cot}\n"
-                        f"{small_model_think_prefix}I want to concisely refine the above reasoning, while preserving ALL crucial steps."
+                        f"{small_model_think_prefix}With context to the prior reasoning chain, I want to concisely refine ONLY the **partial reasoning**."
                     )
                 if args.draft_propose_ignore_str:
                     prompt_for_draft += (
-                        "I must also conclude with a leading question that encourages deeper investigation "
-                        "into how to finalize the solution or verify the steps."
+                        "I must also conclude with a question on the reasoning that encourages deeper investigation "
+                        "to make the steps of solution more robust."
                         f"{small_model_think_suffix}"
                     )
                 else:
@@ -358,8 +358,9 @@ def main():
                 raw_draft = raw_draft_resp["choices"][0]["text"]
                 write_model_name = args.small_model.split("/")[-1]
                 with open(f"{draft_logs}/{write_model_name}_iter{i+1}_draft{d_i+1}.txt", "w") as f:
+                    f.write("\n" + "-" * 80 + "\n" + "\n" + "Prompt For Drafting" + "\n" + "\n" + "-" * 80 + "\n")
                     f.write(prompt_for_draft)
-                    f.write("\n" + "-" * 80 + "\n")
+                    f.write("\n" + "-" * 80 + "\n" + "\n" + "Re-drafted Prompt" + "\n" + "\n" + "-" * 80 + "\n")
                     f.write(raw_draft)
                 drafts.append(raw_draft)
 
@@ -382,9 +383,11 @@ def main():
             else:
                 cot_accumulator += partial_cot + wait_str
 
+        with open(f"{draft_logs}/cot_step_{i+1}.txt", "w") as f:
+            f.write(cot_accumulator) 
+
     final_prompt = (
-        base_prompt + cot_accumulator
-        # + "<|im_start|>answer\n"
+        base_prompt + args.terminating_string + cot_accumulator
     )
     print("\n=== Final prompt to big model ===\n", final_prompt, "\n---")
 
@@ -401,8 +404,9 @@ def main():
     final_reply = final_resp["choices"][0]["text"]
     write_model_name = args.big_model.split("/")[-1]
     with open(f"{draft_logs}/final_reply_{write_model_name}.txt", "w") as f:
+        f.write("\n" + "-" * 80 + "\n" + "\n" + "Final Prompt" + "\n" + "\n" + "-" * 80 + "\n")
         f.write(final_prompt)
-        f.write("\n" + "-" * 80 + "\n")
+        f.write("\n" + "-" * 80 + "\n"+ "\n" + "Final Continuation" + "\n" + "\n" + "-" * 80 + "\n")
         f.write(final_reply)
     print("[Big Model Final Reply]:\n", final_reply)
 
