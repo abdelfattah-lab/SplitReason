@@ -63,14 +63,14 @@ class FakeLogprobOutput:
 
 @register_model("vllm_speculative")
 class SpeculativeVLLM(TemplateLM):
-    _DEFAULT_MAX_LENGTH = 32768
+    _DEFAULT_MAX_LENGTH = 22528 # Slightly below 32k
 
     def __init__(
         self,
         # We keep the same signature as the original VLLM for compatibility,
         # but ignore local model usage. We'll store relevant items for the
         # remote service calls.
-        pretrained: str = "some-remote-model-name",
+        pretrained: str = "meta-llama/Llama-2-7b-chat-hf",
         tokenizer: Optional[str] = None,
         tokenizer_mode: Literal["auto", "slow"] = "auto",
         add_bos_token: Optional[bool] = False,
@@ -82,6 +82,7 @@ class SpeculativeVLLM(TemplateLM):
         dtype: Literal["float16", "bfloat16", "float32", "auto"] = "auto",
         revision: Optional[str] = None,
         trust_remote_code: bool = False,
+        batch_size: Union[str, int] = 1,
         # ... other local vLLM or quantization args omitted for brevity ...
         data_parallel_size: int = 1,
         device: str = "cuda",
@@ -117,6 +118,11 @@ class SpeculativeVLLM(TemplateLM):
         self.add_bos_token = add_bos_token
         self.custom_prefix_token_id = prefix_token_id
 
+        self.batch_size = (
+            "auto"
+            if isinstance(batch_size, str) and "auto" in batch_size
+            else batch_size
+        )
         if not find_spec("vllm"):
             raise RuntimeError("`vllm` is not installed.")
         from vllm.transformers_utils.tokenizer import get_tokenizer
@@ -290,7 +296,7 @@ class SpeculativeVLLM(TemplateLM):
 
     def _model_generate(
         self,
-        requests: List[List[int]],
+        encoded_prompts: List[List[int]],
         generate: bool = False,
         max_tokens: int = None,
         stop: Optional[List[str]] = None,
@@ -308,7 +314,7 @@ class SpeculativeVLLM(TemplateLM):
 
         if generate:
             completions = []
-            for token_ids in requests:
+            for token_ids in encoded_prompts:
                 prompt_text = self.tokenizer.decode(token_ids)
 
                 payload = {
@@ -332,7 +338,7 @@ class SpeculativeVLLM(TemplateLM):
 
         else:
             logprob_outputs = []
-            for token_ids in requests:
+            for token_ids in encoded_prompts:
                 n_tokens = len(token_ids)
                 logprob_outputs.append(FakeLogprobOutput(n_tokens))
 
@@ -429,7 +435,7 @@ class SpeculativeVLLM(TemplateLM):
             context_enc_list = [x[-max_ctx_len:] for x in context_enc_list]
 
             outputs = self._model_generate(
-                requests=context_enc_list,
+                encoded_prompts=context_enc_list,
                 generate=True,
                 max_tokens=max_gen_toks,
                 stop=until,
