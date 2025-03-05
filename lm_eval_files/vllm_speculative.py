@@ -314,9 +314,11 @@ class SpeculativeVLLM(TemplateLM):
 
         if generate:
             completions = []
-            for token_ids in encoded_prompts:
+            req_idx = 0
+            for token_ids in tqdm(encoded_prompts, desc="Sending service requests"):
                 prompt_text = self.tokenizer.decode(token_ids)
-
+                print(f"\n\n Request {req_idx}:\n{prompt_text}\n\n")
+                req_idx += 1
                 payload = {
                     "question": prompt_text,
                     "max_tokens": max_tokens if max_tokens else self._max_gen_toks,

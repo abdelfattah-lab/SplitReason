@@ -21,12 +21,12 @@ We have to modify lm-evaluation-harness to (1) route requests to service (2) add
 `cd lm-evaluation-harness`
 `git checkout 4cec66e4e468d15789473d6d63c3a61a751fa524`
 `cd ./../`
-`cp vllm_speculative.py lm-evaluation-harness/lm_eval/models/`
-`cp vllm_speculative_init.py lm-evaluation-harness/lm_eval/models/__init__.py`
-`cp tasks_init.py lm-evaluation-harness/lm_eval/tasks/__init__.py`
-`cp -r aime lm-evaluation-harness/lm_eval/tasks/`
-`cp -r openai_math lm-evaluation-harness/lm_eval/tasks/`
-`cp -r openai lm-evaluation-harness/lm_eval/tasks/gpqa`
+`cp lm_eval_files/vllm_speculative.py lm-evaluation-harness/lm_eval/models/`
+`cp lm_eval_files/vllm_speculative_init.py lm-evaluation-harness/lm_eval/models/__init__.py`
+`cp lm_eval_files/tasks_init.py lm-evaluation-harness/lm_eval/tasks/__init__.py`
+`cp -r lm_eval_files/aime lm-evaluation-harness/lm_eval/tasks/`
+`cp -r lm_eval_files/openai_math lm-evaluation-harness/lm_eval/tasks/`
+`cp -r lm_eval_files/openai lm-evaluation-harness/lm_eval/tasks/gpqa`
 `cd lm-evaluation-harness`
 `python -m pip install -e .[math,vllm]`
 `cd ./../`

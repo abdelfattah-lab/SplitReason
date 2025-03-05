@@ -24,6 +24,45 @@ export PROCESSOR=gpt-4o-mini
 #     --batch_size auto --apply_chat_template \
 #     --output_path nottc --log_samples --gen_kwargs max_gen_toks=2048
 
+time python -m lm_eval --model vllm_speculative \
+  --model_args "service_script_path=./spec_service.py,
+    pretrained=meta-llama/Llama-2-7b-chat-hf,
+    big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,
+    big_model_port=8000,
+    big_model_gpus=0,
+    small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,
+    small_model_port=8001,
+    small_model_gpus=1,
+    thinking_n_ignore=0,
+    drafting_n=0,
+    full_rewrite=True,
+    bloat_tokens=0,
+    max_tokens=16384,
+    terminate_on_exit=True" \
+    --tasks aime24_nofigures \
+    --limit 10 \
+    --batch_size auto --apply_chat_template \
+    --output_path basic --log_samples --gen_kwargs max_gen_toks=2048
+
+time python -m lm_eval --model vllm_speculative \
+  --model_args "service_script_path=./spec_service.py,
+    pretrained=meta-llama/Llama-2-7b-chat-hf,
+    big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,
+    big_model_port=8000,
+    big_model_gpus=0,
+    small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,
+    small_model_port=8001,
+    small_model_gpus=1,
+    thinking_n_ignore=1,
+    drafting_n=0,
+    full_rewrite=True,
+    bloat_tokens=0,
+    max_tokens=16384,
+    terminate_on_exit=True" \
+    --tasks aime24_nofigures \
+    --limit 10 \
+    --batch_size auto --apply_chat_template \
+    --output_path ignoreonce --log_samples --gen_kwargs max_gen_toks=2048
 
 time python -m lm_eval --model vllm_speculative \
   --model_args "service_script_path=./spec_service.py,
@@ -41,6 +80,26 @@ time python -m lm_eval --model vllm_speculative \
     max_tokens=16384,
     terminate_on_exit=True" \
     --tasks aime24_nofigures \
-    --limit 5 \
+    --limit 10 \
     --batch_size auto --apply_chat_template \
-    --output_path nottc --log_samples --gen_kwargs max_gen_toks=2048
+    --output_path ignoreonce_redraftonce --log_samples --gen_kwargs max_gen_toks=2048
+
+time python -m lm_eval --model vllm_speculative \
+  --model_args "service_script_path=./spec_service.py,
+    pretrained=meta-llama/Llama-2-7b-chat-hf,
+    big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,
+    big_model_port=8000,
+    big_model_gpus=0,
+    small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,
+    small_model_port=8001,
+    small_model_gpus=1,
+    thinking_n_ignore=2,
+    drafting_n=0,
+    full_rewrite=True,
+    bloat_tokens=0,
+    max_tokens=16384,
+    terminate_on_exit=True" \
+    --tasks aime24_nofigures \
+    --limit 10 \
+    --batch_size auto --apply_chat_template \
+    --output_path ignoretwice --log_samples --gen_kwargs max_gen_toks=2048

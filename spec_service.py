@@ -245,21 +245,32 @@ def speculative_reason():
                         f"We currently have partial reasoning:\n\n"
                         f"{cot_accumulator} \t {partial_cot}\n"
                         f"{small_model_think_prefix}"
-                        "I want to concisely refine the above reasoning, preserving ALL crucial steps."
+                        "I want to concisely refine the above reasoning, preserving all the key steps / core reasoning."
                     )
                 else:
                     if len(cot_accumulator) == 0:
                         cot_inject = "No Partial CoT yet"
                     else:
                         cot_inject = cot_accumulator
+                        
                     prompt_for_draft = (
                         f"The question asked:\n{question}\n\n"
-                        f"Prior reasoning chain:\n{cot_inject}\n\n"
-                        f"Recently, we have partial reasoning:\n\n"
+                        f"Prior reasoning chain:\n"
                         f"{partial_cot}\n"
                         f"{small_model_think_prefix}"
-                        "I want to refine ONLY this partial reasoning. "
+                        "I want to refine the Partial Reasoning Trace, keeping all the key steps / core reasoning."
                     )
+                    # prompt_for_draft = (
+                    #     f"The question asked:\n{question}\n\n"
+                    #     f"Prior reasoning chain:\n{cot_inject}\n\n"
+                    #     f"\n\n--- End Of Prior Reasoning Chain ---\n\n"
+                    #     f"Now, we focus on this partial reasoning trace:\n\n"
+                    #     f"\n\n--- Start Of Partial Reasoning Trace ---\n\n"
+                    #     f"{partial_cot}\n"
+                    #     f"\n\n--- End Of Partial Reasoning Trace ---\n\n"
+                    #     f"{small_model_think_prefix}"
+                    #     "I want to refine the Partial Reasoning Trace. No repetitions, just new information. "
+                    # )
                 if service_args.draft_propose_ignore_str:
                     prompt_for_draft += (
                         "I must also conclude with a question on the reasoning that encourages deeper investigation "
