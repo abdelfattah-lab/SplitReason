@@ -5,6 +5,7 @@ import time
 import signal
 import sys
 import requests
+import threading
 
 from flask import Flask, request, jsonify
 
@@ -93,6 +94,13 @@ def extract_cot(raw_text, think_suffix, fallback_suffixes=()):
 
     return raw_text
 
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    def stop_server():
+        time.sleep(0.2)
+        os._exit(0) 
+    threading.Thread(target=stop_server).start()
+    return "Shutting down..."
 
 @app.route("/ping", methods=["GET"])
 def ping():
@@ -100,7 +108,6 @@ def ping():
     Simple health check endpoint to verify service is up.
     """
     return jsonify({"message": "pong"}), 200
-
 
 @app.route("/speculative_reason", methods=["POST"])
 def speculative_reason():
@@ -126,6 +133,12 @@ def speculative_reason():
         return jsonify({"error": "Missing 'question' in JSON payload"}), 400
 
     question = data["question"]
+    test_logging = data.get("test_logging", False)
+    if test_logging:
+        draft_logs = "draft_logs"
+        if not os.path.exists(draft_logs):
+            os.makedirs(draft_logs)
+        print(f"[Service] test_logging=True; extra debug for question: {question}")
 
     # We'll fallback to the service_args defaults if user didn't pass them.
     thinking_n_ignore = data.get("thinking_n_ignore", service_args.thinking_n_ignore)
@@ -213,7 +226,15 @@ def speculative_reason():
 
         raw_reply = raw_resp["choices"][0]["text"]
         partial_cot = extract_cot(raw_reply, model_think_suffix, fallback_suffixes)
-
+        if test_logging:
+            write_model_name = model_name.split("/")[-1]
+            with open(f"{draft_logs}/{write_model_name}_iter{i+1}.txt", "w") as f:
+                f.write("\n" + "-" * 80 + "\n" + "\n" + "Input to LLM" + "\n" + "\n" + "-" * 80 + "\n")
+                f.write(iteration_prompt)
+                f.write("\n" + "-" * 80 + "\n" + "\n" + "Raw Reply" + "\n" + "\n" + "-" * 80 + "\n")
+                f.write(raw_reply)
+                f.write("\n" + "-" * 80 + "\n" + "\n" + "Extracted CoT" + "\n" + "\n" + "-" * 80 + "\n")
+                f.write(partial_cot)
         # Optionally do drafting with the small model
         if drafting_n > 0:
             drafts = []
@@ -267,6 +288,13 @@ def speculative_reason():
 
                 raw_draft = draft_resp["choices"][0]["text"]
                 drafts.append(raw_draft)
+                if test_logging:    
+                    write_model_name = service_args.small_model.split("/")[-1]
+                    with open(f"{draft_logs}/{write_model_name}_iter{i+1}_draft{d_i+1}.txt", "w") as f:
+                        f.write("\n" + "-" * 80 + "\n" + "\n" + "Prompt For Drafting" + "\n" + "\n" + "-" * 80 + "\n")
+                        f.write(prompt_for_draft)
+                        f.write("\n" + "-" * 80 + "\n" + "\n" + "Re-drafted Prompt" + "\n" + "\n" + "-" * 80 + "\n")
+                        f.write(raw_draft)
 
             # pick "best" draft by some scoring
             best_score = -1e9
@@ -284,6 +312,9 @@ def speculative_reason():
             cot_accumulator = partial_cot + wait_str
         else: # No longer checks for draft-propose-ignore-str, better to just add wait anyway.
             cot_accumulator += partial_cot + wait_str
+        if test_logging:
+            with open(f"{draft_logs}/cot_step_{i+1}.txt", "w") as f:
+                f.write(cot_accumulator) 
 
     # ---------------------------------------------------------------------
     # Step 2: final answer
@@ -311,6 +342,15 @@ def speculative_reason():
         "final_answer": final_reply,
         "usage_records": usage_data
     }
+    if test_logging:
+        write_model_name = service_args.big_model.split("/")[-1]
+        with open(f"{draft_logs}/final_reply_{write_model_name}.txt", "w") as f:
+            f.write("\n" + "-" * 80 + "\n" + "\n" + "Final Prompt" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(final_prompt)
+            f.write("\n" + "-" * 80 + "\n"+ "\n" + "Final Continuation" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(final_reply)
+        print("[Service] Usage data:", usage_data)
+
     return jsonify(response_payload), 200
 
 
