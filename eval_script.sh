@@ -22,4 +22,4 @@ python -m lm_eval --model vllm_speculative \
     terminate_on_exit=True" \
     --tasks aime24_nofigures \
     --batch_size auto --apply_chat_template \
-    --output_path nottc --log_samples --gen_kwargs max_gen_toks=16384
+    --output_path nottc --log_samples --gen_kwargs max_gen_toks=2048
