@@ -104,7 +104,7 @@ class SpeculativeVLLM(TemplateLM):
         self.service_params = kwargs
 
         self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
-        self._start_service_if_down()
+        self._ensure_correct_service_is_running()
         big_model_name = self.service_params.get("big_model", pretrained)
 
         if max_length and max_model_len:
@@ -144,42 +144,46 @@ class SpeculativeVLLM(TemplateLM):
             f"Max length: {self._max_length}, default max_gen_toks: {self._max_gen_toks}."
         )
 
-
-    def _start_service_if_down(self):
-        """
-        Pings the self.service_host:self.service_port /ping endpoint.
-        If not up, we spawn the spec_service.py with the relevant arguments 
-        from self.service_params.
-        """
+    def _ensure_correct_service_is_running(self):
         ping_url = f"http://{self.service_host}:{self.service_port}/ping"
         if self._ping_service(ping_url):
-            eval_logger.info(f"[SpeculativeVLLM] Found service alive at {ping_url}.")
-            return
-
-        # Not responding => let's start it
-        eval_logger.info("[SpeculativeVLLM] Service not responding; launching spec_service.py...")
+            eval_logger.info(f"[SpeculativeVLLM] Service is already running; attempting shutdown.")
+            
+            # Attempt a graceful shutdown via /shutdown
+            shutdown_url = f"http://{self.service_host}:{self.service_port}/shutdown"
+            try:
+                requests.post(shutdown_url, timeout=5)
+            except requests.exceptions.RequestException:
+                pass
+            
+            # Wait for it to actually stop responding
+            start_time = time.time()
+            while self._ping_service(ping_url):
+                if time.time() - start_time > 30:
+                    raise RuntimeError("[SpeculativeVLLM] Could not shut down the service within 30s; exiting.")
+                time.sleep(1)
+            eval_logger.info("[SpeculativeVLLM] Old service has been shut down.")
+        
+        # Now start the service fresh with updated arguments
+        eval_logger.info("[SpeculativeVLLM] Launching spec_service.py...")
 
         # Gather the arguments that your spec_service.py expects:
-        # e.g. --big_model=, --big_model_gpus=, --big_model_port=, etc.
-        # We'll read from self.service_params. Provide defaults or raise if missing.
         big_model = self.service_params.get("big_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
         big_model_port = self.service_params.get("big_model_port", 8000)
         big_model_gpus = self.service_params.get("big_model_gpus", "0,1").replace("|", ",")
         small_model = self.service_params.get("small_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
         small_model_port = self.service_params.get("small_model_port", 8001)
         small_model_gpus = self.service_params.get("small_model_gpus", "2").replace("|", ",")
-
-        # other optional arguments:
+        
         thinking_n_ignore = self.service_params.get("thinking_n_ignore", 2)
         drafting_n = self.service_params.get("drafting_n", 1)
-        small_first = "--small_first" if self.service_params.get("small_first", False) else ""
-        full_rewrite = "--full_rewrite" if self.service_params.get("full_rewrite", False) else ""
-        draft_propose_ignore_str = "--draft_propose_ignore_str" if self.service_params.get("draft_propose_ignore_str", False) else ""
         bloat_tokens = self.service_params.get("bloat_tokens", 0)
         max_tokens = self.service_params.get("max_tokens", 16384)
-        terminating_string = self.service_params.get("terminating_string", r"""\nPut your final answer within \boxed{}.""")
+        terminating_string = self.service_params.get(
+            "terminating_string",
+            r"\nPut your final answer within \boxed{}."
+        )
 
-        # Construct the command to run spec_service.py
         cmd = [
             "python", self.service_script_path,
             f"--big_model={big_model}",
@@ -193,17 +197,15 @@ class SpeculativeVLLM(TemplateLM):
             f"--bloat_tokens={bloat_tokens}",
             f"--max_tokens={max_tokens}",
             f"--terminating_string={terminating_string}",
-            "--port", str(self.service_port)
+            "--port", str(self.service_port),
         ]
-        if small_first:
-            cmd.append("--small_first")
-        if full_rewrite:
-            cmd.append("--full_rewrite")
-        if draft_propose_ignore_str:
-            cmd.append("--draft_propose_ignore_str")
 
-        # (optional) if we want to pass --terminate_on_exit
-        # so that the service kills the sub-models on ctrl+C:
+        if self.service_params.get("small_first", False):
+            cmd.append("--small_first")
+        if self.service_params.get("full_rewrite", False):
+            cmd.append("--full_rewrite")
+        if self.service_params.get("draft_propose_ignore_str", False):
+            cmd.append("--draft_propose_ignore_str")
         if self.service_params.get("terminate_on_exit", False):
             cmd.append("--terminate_on_exit")
 
@@ -211,19 +213,20 @@ class SpeculativeVLLM(TemplateLM):
         env = os.environ.copy()
         self.service_proc = subprocess.Popen(cmd, env=env)
 
-        # Wait until the service is up (ping success), or a timeout
+        # Wait until the service is up
         start_time = time.time()
-        timeout = 600  # e.g. 5 minutes to wait for service
+        timeout = 600
         while time.time() - start_time < timeout:
             if self._ping_service(ping_url):
                 eval_logger.info("[SpeculativeVLLM] Service started successfully.")
                 return
             if self.service_proc.poll() is not None:
                 # The process terminated unexpectedly
-                raise RuntimeError("Service process exited prematurely.")
+                raise RuntimeError("[SpeculativeVLLM] Service process exited prematurely.")
             time.sleep(2)
 
-        raise RuntimeError(f"Service did not respond within {timeout} seconds.")
+        raise RuntimeError("[SpeculativeVLLM] Service did not respond within 600 seconds.")
+
 
     def _ping_service(self, url: str) -> bool:
         """
