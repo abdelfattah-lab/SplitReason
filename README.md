@@ -54,4 +54,6 @@ Credit to [s1](https://github.com/simplescaling/s1/tree/main) for lm-evaluation-
 
 # Test with custom questions
 
-`python test_spec
+As an example, this will sequentially scale once, re-draft the CoT before the sequential scaling, re-write the full CoT everytime. Also it will encourage the small model to propose potential reasoning errors for continuity. 
+
+`python test_spec.py --test_logging --thinking_n_ignore 1 --drafting_n 1 --full_rewrite --draft_propose_ignore_str`
