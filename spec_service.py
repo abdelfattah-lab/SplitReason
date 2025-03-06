@@ -147,7 +147,6 @@ def speculative_reason():
     temperature = data.get("temperature", 0.6)
     max_tokens = data.get("max_tokens", service_args.max_tokens)
     terminating_string = data.get("terminating_string", service_args.terminating_string)
-
     # If you want to do "bloat tokens," you could incorporate that logic here:
     if service_args.bloat_tokens > 0:
         bloat_sentence = ("question to follow soon. " * 20)  # ~100 tokens
@@ -184,10 +183,15 @@ def speculative_reason():
     cot_accumulator = ""
     usage_data = []
 
-    # ---------------------------------------------------------------------
-    # Step 1: multiple "thinking" iterations using either small or big model
-    # ---------------------------------------------------------------------
+    print("\n\n Running with the following parameters: \n\n")
+    print(f"thinking_n_ignore: {thinking_n_ignore}")
+    print(f"drafting_n: {drafting_n}")
+    print(f"full_rewrite: {full_rewrite}")
+    print(f"terminating_string: {terminating_string}")
+    print("\n\n")
+
     for i in range(thinking_n_ignore):
+        print("\n\n At thinking ignore iteration: ", i)
         # Decide whether to use big or small model this iteration
         if i == 0 and service_args.small_first:
             model_port = service_args.small_model_port
@@ -239,6 +243,7 @@ def speculative_reason():
         if drafting_n > 0:
             drafts = []
             for d_i in range(drafting_n):
+                print("\n\n At drafting iteration: ", d_i)
                 if full_rewrite:
                     prompt_for_draft = (
                         f"The question asked:\n{question}\n\n"
@@ -260,17 +265,6 @@ def speculative_reason():
                         f"{small_model_think_prefix}"
                         "I want to refine the Partial Reasoning Trace, keeping all the key steps / core reasoning."
                     )
-                    # prompt_for_draft = (
-                    #     f"The question asked:\n{question}\n\n"
-                    #     f"Prior reasoning chain:\n{cot_inject}\n\n"
-                    #     f"\n\n--- End Of Prior Reasoning Chain ---\n\n"
-                    #     f"Now, we focus on this partial reasoning trace:\n\n"
-                    #     f"\n\n--- Start Of Partial Reasoning Trace ---\n\n"
-                    #     f"{partial_cot}\n"
-                    #     f"\n\n--- End Of Partial Reasoning Trace ---\n\n"
-                    #     f"{small_model_think_prefix}"
-                    #     "I want to refine the Partial Reasoning Trace. No repetitions, just new information. "
-                    # )
                 if service_args.draft_propose_ignore_str:
                     prompt_for_draft += (
                         "I must also conclude with a question on the reasoning that encourages deeper investigation "

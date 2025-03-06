@@ -10,13 +10,7 @@ OPENAI_API_KEY=XXXX
 HF_TOKEN=XXXX
 ```
 
-# Files
-
-`speculative_reasoner.py` has flexible templates -- deprecate in favor of service.
-
-`spec_service.py` is the service that can be run independently, or with lm-eval for evaluation of different methods.
-
-# Installation instructions
+# Installation
 
 `python -m pip install -r requirements.txt`
 

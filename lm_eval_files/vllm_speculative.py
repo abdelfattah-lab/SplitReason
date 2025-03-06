@@ -170,10 +170,10 @@ class SpeculativeVLLM(TemplateLM):
         # Gather the arguments that your spec_service.py expects:
         big_model = self.service_params.get("big_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
         big_model_port = self.service_params.get("big_model_port", 8000)
-        big_model_gpus = self.service_params.get("big_model_gpus", "0,1").replace("|", ",")
+        big_model_gpus = str(self.service_params.get("big_model_gpus", "0,1")).replace("|", ",")
         small_model = self.service_params.get("small_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
         small_model_port = self.service_params.get("small_model_port", 8001)
-        small_model_gpus = self.service_params.get("small_model_gpus", "2").replace("|", ",")
+        small_model_gpus = str(self.service_params.get("small_model_gpus", "2")).replace("|", ",")
         
         thinking_n_ignore = self.service_params.get("thinking_n_ignore", 2)
         drafting_n = self.service_params.get("drafting_n", 1)
