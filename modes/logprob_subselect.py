@@ -1,6 +1,8 @@
 # modes/logprob_subselect.py
-
+import traceback
 from typing import List, Tuple
+import random
+from tqdm import tqdm
 
 def eval_logprob_vllm(
     text_batch: List[str],
@@ -15,64 +17,53 @@ def eval_logprob_vllm(
     Evaluate the total log-likelihood of each string in text_batch using
     the big model. Returns a list of total log-likelihood scores (higher is better).
 
-    Under the hood, we do one request per string to vLLM with max_tokens=0,
-    and 'prompt_logprobs' or 'logprobs' set so that the model returns the
-    log probabilities of the prompt tokens. Then we sum them up.
-    
-    NOTE: Some versions of vLLM accept a list of prompts in a single request.
-    For simplicity here, we do one request per string. You can optimize if desired.
+    We do one request per string to vLLM with max_tokens=0 and echo=True,
+    so that the model returns the token-level log probabilities of the prompt.
     """
     scores = []
+    gentext = []
     url = f"http://localhost:{big_model_port}/v1/completions"
 
-    for text in text_batch:
-        payload = {
-            "model": big_model,
-            "prompt": text,
-            # We generate 0 tokens because we only want to evaluate logprobs
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            # Use the logprobs feature to get log-likelihood.
-            # If you want to see logprobs for each prompt token, use 'prompt_logprobs'.
-            # If you want them for the *generated* tokens (which are zero here),
-            # you'd use `logprobs`. But here we demonstrate prompt_logprobs.
-            "prompt_logprobs": logprobs
-        }
+    for text in tqdm(text_batch):
+        try:
+            # Use `logprobs` (the integer) and `echo=True` to retrieve prompt token logprobs
+            payload = {
+                "model": big_model,
+                "prompt": text,
+                "max_tokens": 10,
+                "temperature": temperature,
+                "logprobs": logprobs,     # how many top logprobs you want
+                # "echo": True            # echo the prompt back in "choices[0]['logprobs']"
+            }
+            resp = requests.post(url, json=payload)
+            resp.raise_for_status()
+            resp_json = resp.json()
 
-        resp = requests.post(url, json=payload)
-        resp.raise_for_status()
-        resp_json = resp.json()
+            generated_text = resp_json["choices"][0]["text"]
+            # scores.append(random.random())
+            choice = resp_json["choices"][0]
+            logprob_info = choice.get("logprobs")
+            if not logprob_info:
+                scores.append(float("-inf"))
+                continue
 
-        # The vLLM response typically includes something like:
-        #   {
-        #     "choices": [
-        #       {
-        #         "text": "",
-        #         "prompt_logprobs": {
-        #             "tokens": [...],
-        #             "token_logprobs": [...],
-        #             "top_logprobs": [...],
-        #             ...
-        #         }
-        #       }
-        #     ]
-        #   }
-        #
-        # We need to parse that to get the total log probability.
-        choice = resp_json["choices"][0]
-        prompt_loginfo = choice.get("prompt_logprobs", None)
-        if not prompt_loginfo:
-            # If we didn't get logprobs for some reason, fallback score
-            scores.append(float("-inf"))
-            continue
-
-        token_logprobs = prompt_loginfo.get("token_logprobs", [])
-        # sum them up
-        total_ll = sum(token_logprobs)
-        scores.append(total_ll)
-
+            token_logprobs = logprob_info.get("token_logprobs", [])
+            token_logprobs = [p for p in token_logprobs if p is not None]
+            prompt_ll = sum(token_logprobs) if len(token_logprobs) > 1 else 0.0
+            scores.append(prompt_ll)
+            gentext.append(generated_text)
+        except Exception as e:
+            traceback.print_exc()
+            import pdb; pdb.set_trace()
+            # append random number
+            print("\n\n [WARNING]: Using Random Log-Prob Assignment, failed to get logprobs for text: ", text, "\n\n")
+            scores.append(random.random())
+    # print each text item and their score
+    rtrack = 0
+    for text, score in zip(text_batch, scores):
+        print(f"{rtrack} Variant: \n Text: {text}\nScore: {score}\n Continued Text: {gentext[rtrack]}\n")
+        rtrack += 1
     return scores
-
 
 def run_logprob_subselect_flow(
     question: str,

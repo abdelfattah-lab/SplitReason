@@ -43,9 +43,11 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
-        "--enable_prefix_caching"
+        # "--max-num-batched-tokens", "32768",
+        "--enable_prefix_caching",
+        "--enable-chunked-prefill"
     ]
-    print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids}")
+    print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
     return subprocess.Popen(cmd, env=env)
 
 def launch_small_model(model_name, port, gpu_ids):
@@ -60,9 +62,11 @@ def launch_small_model(model_name, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
-        "--enable_prefix_caching"
+        # "--max-num-batched-tokens", "32768",
+        "--enable_prefix_caching",
+        # "--enable-chunked-prefill"
     ]
-    print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids}")
+    print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
     return subprocess.Popen(cmd, env=env)
 
 def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model"):
@@ -140,6 +144,8 @@ def speculative_reason():
             question,
             big_model=service_args.big_model,
             big_model_port=service_args.big_model_port,
+            small_model=service_args.small_model,
+            small_model_port=service_args.small_model_port,
             generate_text_vllm=generate_text_vllm,  # same function from spec_service
             max_tokens=max_tokens,
             temperature=temperature
