@@ -96,7 +96,8 @@ def main():
     parser.add_argument("--sgen", type=int, default=256)
     parser.add_argument("--stok", type=int, default=16)
     parser.add_argument("--sdecay", type=int, default=2)
-    parser.add_argument("--ltok", type=int, default=0)
+    parser.add_argument("--ltok", type=int, default=16)
+    parser.add_argument("--lbound", type=int, default=4)
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
     parser.add_argument("--bloat_tokens", type=int, default=0)
@@ -147,6 +148,7 @@ def main():
             f"--stok={args.stok}",
             f"--sdecay={args.sdecay}",
             f"--ltok={args.ltok}",
+            f"--lbound={args.lbound}",
             "--port", str(args.service_port),
         ]
     # Handle optional args as before
@@ -187,6 +189,7 @@ def main():
         "stok": args.stok,
         "sdecay": args.sdecay,
         "ltok": args.ltok,
+        "lbound": args.lbound,
         "bloat_tokens": args.bloat_tokens,
         "max_tokens": args.max_tokens,
         "terminating_string": args.terminating_string,

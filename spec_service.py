@@ -156,6 +156,7 @@ def speculative_reason():
         stok = data.get("stok", 16)     # how many tokens small model generates each time
         sdecay = data.get("sdecay", 2)  # how many expansions to discard fractionally
         ltok = data.get("ltok", 0)      # how many tokens big model adds each iteration
+        lbound = data.get("lbound", 8)
 
         final_reply, usage_data = run_logprob_subselect_flow(
             question=question,
@@ -170,7 +171,10 @@ def speculative_reason():
             small_model=service_args.small_model,
             small_model_port=service_args.small_model_port,
             requests=requests,
-            generate_text_vllm=generate_text_vllm
+            terminating_string=terminating_string,
+            generate_text_vllm=generate_text_vllm,
+            lbound=service_args.lbound,
+            test_logging=test_logging
         )
 
     else:
@@ -228,6 +232,7 @@ def parse_args():
     parser.add_argument("--stok", type=int, default=16)
     parser.add_argument("--sdecay", type=int, default=2)
     parser.add_argument("--ltok", type=int, default=0)
+    parser.add_argument("--lbound", type=int, default=4)
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
     parser.add_argument("--bloat_tokens", type=int, default=0)
