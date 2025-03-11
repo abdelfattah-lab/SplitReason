@@ -9,6 +9,10 @@ import threading
 
 from flask import Flask, request, jsonify
 
+from modes.spec_rewrite import run_speculative_reason_flow
+from modes.placeholder import run_placeholder_flow
+from modes.logprob_subselect import run_logprob_subselect_flow
+
 app = Flask(__name__)
 
 big_model_proc = None
@@ -111,252 +115,88 @@ def ping():
 
 @app.route("/speculative_reason", methods=["POST"])
 def speculative_reason():
-    """
-    This endpoint will accept a JSON payload that includes a 'prompt'
-    or 'question', and then do multi-step CoT reasoning using big/small
-    vLLM models launched in the background.
-
-    Sample JSON POST to /speculative_reason:
-        {
-          "question": "What is 2+2?",
-          "thinking_n_ignore": 2,
-          "drafting_n": 1,
-          "full_rewrite": false,
-          "draft_propose_ignore_str": false,
-          "max_tokens": 1024,
-          "temperature": 0.7,
-          "terminating_string": "\\nFinal Answer"
-        }
-    """
     data = request.json
     if not data or "question" not in data:
         return jsonify({"error": "Missing 'question' in JSON payload"}), 400
 
     question = data["question"]
     test_logging = data.get("test_logging", False)
-    if test_logging:
-        draft_logs = "draft_logs"
-        if not os.path.exists(draft_logs):
-            os.makedirs(draft_logs)
-        print(f"[Service] test_logging=True; extra debug for question: {question}")
 
-    # We'll fallback to the service_args defaults if user didn't pass them.
+    # Pull out all the relevant arguments from JSON or fallback to service_args
     thinking_n_ignore = data.get("thinking_n_ignore", service_args.thinking_n_ignore)
     drafting_n = data.get("drafting_n", service_args.drafting_n)
     full_rewrite = data.get("full_rewrite", service_args.full_rewrite)
-    temperature = data.get("temperature", 0.6)
     max_tokens = data.get("max_tokens", service_args.max_tokens)
+    temperature = data.get("temperature", 0.6)
     terminating_string = data.get("terminating_string", service_args.terminating_string)
-    # If you want to do "bloat tokens," you could incorporate that logic here:
-    if service_args.bloat_tokens > 0:
-        bloat_sentence = ("question to follow soon. " * 20)  # ~100 tokens
-        question = bloat_sentence * (service_args.bloat_tokens // 100) + question
+    draft_propose_ignore_str = data.get("draft_propose_ignore_str", service_args.draft_propose_ignore_str)
+    small_first = data.get("small_first", service_args.small_first)
+    bloat_tokens = data.get("bloat_tokens", service_args.bloat_tokens)
 
-    # Basic prompt for user query
-    base_prompt = f"<|user|>\n{question}\n<|assistant|>\n"
-
-    # Big model "thinking" format
-    if "simplescaling" in service_args.big_model:
-        big_model_think_prefix = "<|im_start|>think\n"
-        big_model_think_suffix = "<|im_start|>answer"
-    elif "deepseek-ai" in service_args.big_model:
-        big_model_think_prefix = "<think>\n"
-        big_model_think_suffix = "\n</think>"
-    else:
-        return jsonify({"error": "Unknown big model format."}), 400
-
-    # Small model "thinking" format
-    if "simplescaling" in service_args.small_model:
-        small_model_think_prefix = "<|im_start|>think\n"
-        small_model_think_suffix = "<|im_start|>answer"
-    elif "deepseek-ai" in service_args.small_model:
-        small_model_think_prefix = "<think>\n"
-        small_model_think_suffix = "\n</think>"
-    else:
-        # For "drafting" models that do not have specialized tokens:
-        small_model_think_prefix = "\n"
-        small_model_think_suffix = "\n"
-
-    wait_str = "\nWait"
-    fallback_suffixes = ()
-
-    cot_accumulator = ""
-    usage_data = []
-
-    print("\n\n Running with the following parameters: \n\n")
-    print(f"thinking_n_ignore: {thinking_n_ignore}")
-    print(f"drafting_n: {drafting_n}")
-    print(f"full_rewrite: {full_rewrite}")
-    print(f"terminating_string: {terminating_string}")
-    print("\n\n")
-
-    for i in range(thinking_n_ignore):
-        print("\n\n At thinking ignore iteration: ", i)
-        # Decide whether to use big or small model this iteration
-        if i == 0 and service_args.small_first:
-            model_port = service_args.small_model_port
-            model_name = service_args.small_model
-            model_think_prefix = small_model_think_prefix
-            model_think_suffix = small_model_think_suffix
-        else:
-            model_port = service_args.big_model_port
-            model_name = service_args.big_model
-            model_think_prefix = big_model_think_prefix
-            model_think_suffix = big_model_think_suffix
-
-        # Prompt includes previously accumulated CoT
-        if i == 0:
-            iteration_prompt = base_prompt + model_think_prefix
-        else:
-            iteration_prompt = base_prompt + cot_accumulator
-
-        raw_resp, latency = generate_text_vllm(
-            iteration_prompt,
-            port=model_port,
-            temperature=temperature,
+    # Decide which flow to run
+    if data.get("placeholder_mode", False):
+        # Run the "placeholder" single-call flow
+        final_reply, usage_data = run_placeholder_flow(
+            question,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            generate_text_vllm=generate_text_vllm,  # same function from spec_service
             max_tokens=max_tokens,
-            model=model_name
+            temperature=temperature
         )
-        # usage info (if the server returns it)
-        usage_dict = raw_resp.get("usage", {})
-        usage_data.append({
-            "Model": model_name,
-            "ThinkIter": i+1,
-            "DraftVersion": 0,
-            "PromptTokens": usage_dict.get("prompt_tokens", 0),
-            "CompletionTokens": usage_dict.get("completion_tokens", 0),
-            "Latency": latency
-        })
 
-        raw_reply = raw_resp["choices"][0]["text"]
-        partial_cot = extract_cot(raw_reply, model_think_suffix, fallback_suffixes)
-        if test_logging:
-            write_model_name = model_name.split("/")[-1]
-            with open(f"{draft_logs}/{write_model_name}_iter{i+1}.txt", "w") as f:
-                f.write("\n" + "-" * 80 + "\n" + "\n" + "Input to LLM" + "\n" + "\n" + "-" * 80 + "\n")
-                f.write(iteration_prompt)
-                f.write("\n" + "-" * 80 + "\n" + "\n" + "Raw Reply" + "\n" + "\n" + "-" * 80 + "\n")
-                f.write(raw_reply)
-                f.write("\n" + "-" * 80 + "\n" + "\n" + "Extracted CoT" + "\n" + "\n" + "-" * 80 + "\n")
-                f.write(partial_cot)
-        # Optionally do drafting with the small model
-        if drafting_n > 0:
-            drafts = []
-            for d_i in range(drafting_n):
-                print("\n\n At drafting iteration: ", d_i)
-                if full_rewrite:
-                    prompt_for_draft = (
-                        f"The question asked:\n{question}\n\n"
-                        f"We currently have partial reasoning:\n\n"
-                        f"{cot_accumulator} \t {partial_cot}\n"
-                        f"{small_model_think_prefix}"
-                        "I want to concisely refine the above reasoning, preserving all the key steps / core reasoning."
-                    )
-                else:
-                    if len(cot_accumulator) == 0:
-                        cot_inject = "No Partial CoT yet"
-                    else:
-                        cot_inject = cot_accumulator
-                        
-                    prompt_for_draft = (
-                        f"The question asked:\n{question}\n\n"
-                        f"Prior reasoning chain:\n"
-                        f"{partial_cot}\n"
-                        f"{small_model_think_prefix}"
-                        "I want to refine the Partial Reasoning Trace, keeping all the key steps / core reasoning."
-                    )
-                if service_args.draft_propose_ignore_str:
-                    prompt_for_draft += (
-                        "I must also conclude with a question on the reasoning that encourages deeper investigation "
-                        "to make the steps of solution more robust."
-                        f"{small_model_think_suffix}"
-                    )
-                else:
-                    prompt_for_draft += f"{small_model_think_suffix}"
+    elif data.get("logprob_subselect", False):
+        sgen = data.get("sgen", 8)      # number of parallel expansions in small model
+        stok = data.get("stok", 16)     # how many tokens small model generates each time
+        sdecay = data.get("sdecay", 2)  # how many expansions to discard fractionally
+        ltok = data.get("ltok", 0)      # how many tokens big model adds each iteration
 
-                draft_resp, draft_latency = generate_text_vllm(
-                    prompt_for_draft,
-                    port=service_args.small_model_port,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    model=service_args.small_model
-                )
-                usage_dict = draft_resp.get("usage", {})
-                usage_data.append({
-                    "Model": service_args.small_model,
-                    "ThinkIter": i+1,
-                    "DraftVersion": d_i+1,
-                    "PromptTokens": usage_dict.get("prompt_tokens", 0),
-                    "CompletionTokens": usage_dict.get("completion_tokens", 0),
-                    "Latency": draft_latency
-                })
+        final_reply, usage_data = run_logprob_subselect_flow(
+            question=question,
+            sgen=sgen,
+            stok=stok,
+            sdecay=sdecay,
+            ltok=ltok,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            small_model=service_args.small_model,
+            small_model_port=service_args.small_model_port,
+            requests=requests,
+            generate_text_vllm=generate_text_vllm
+        )
 
-                raw_draft = draft_resp["choices"][0]["text"]
-                drafts.append(raw_draft)
-                if test_logging:    
-                    write_model_name = service_args.small_model.split("/")[-1]
-                    with open(f"{draft_logs}/{write_model_name}_iter{i+1}_draft{d_i+1}.txt", "w") as f:
-                        f.write("\n" + "-" * 80 + "\n" + "\n" + "Prompt For Drafting" + "\n" + "\n" + "-" * 80 + "\n")
-                        f.write(prompt_for_draft)
-                        f.write("\n" + "-" * 80 + "\n" + "\n" + "Re-drafted Prompt" + "\n" + "\n" + "-" * 80 + "\n")
-                        f.write(raw_draft)
+    else:
+        # Use the original multi-step speculative reasoning approach
+        final_reply, usage_data = run_speculative_reason_flow(
+            question,
+            test_logging,
+            thinking_n_ignore,
+            drafting_n,
+            full_rewrite,
+            temperature,
+            max_tokens,
+            terminating_string,
+            draft_propose_ignore_str,
+            small_first,
+            service_args.big_model_port,
+            service_args.big_model,
+            service_args.small_model_port,
+            service_args.small_model,
+            bloat_tokens,
+            generate_text_vllm,
+            extract_cot,
+            service_args
+        )
 
-            # pick "best" draft by some scoring
-            best_score = -1e9
-            best_draft = drafts[0]
-            for d in drafts:
-                # e.g. trivial score: length of text
-                s = len(d)
-                if s > best_score:
-                    best_score = s
-                    best_draft = d
-            partial_cot = best_draft
-
-        # Accumulate partial chain-of-thought
-        if full_rewrite:
-            cot_accumulator = partial_cot + wait_str
-        else: # No longer checks for draft-propose-ignore-str, better to just add wait anyway.
-            cot_accumulator += partial_cot + wait_str
-        if test_logging:
-            with open(f"{draft_logs}/cot_step_{i+1}.txt", "w") as f:
-                f.write(cot_accumulator) 
-
-    # ---------------------------------------------------------------------
-    # Step 2: final answer
-    # ---------------------------------------------------------------------
-    final_prompt = base_prompt + terminating_string + cot_accumulator
-    final_resp, final_latency = generate_text_vllm(
-        final_prompt,
-        port=service_args.big_model_port,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        model=service_args.big_model
-    )
-    usage_dict = final_resp.get("usage", {})
-    usage_data.append({
-        "Model": service_args.big_model,
-        "ThinkIter": "final",
-        "DraftVersion": 0,
-        "PromptTokens": usage_dict.get("prompt_tokens", 0),
-        "CompletionTokens": usage_dict.get("completion_tokens", 0),
-        "Latency": final_latency
-    })
-
-    final_reply = final_resp["choices"][0]["text"]
+    # Build final JSON response
     response_payload = {
         "final_answer": final_reply,
         "usage_records": usage_data
     }
-    if test_logging:
-        write_model_name = service_args.big_model.split("/")[-1]
-        with open(f"{draft_logs}/final_reply_{write_model_name}.txt", "w") as f:
-            f.write("\n" + "-" * 80 + "\n" + "\n" + "Final Prompt" + "\n" + "\n" + "-" * 80 + "\n")
-            f.write(final_prompt)
-            f.write("\n" + "-" * 80 + "\n"+ "\n" + "Final Continuation" + "\n" + "\n" + "-" * 80 + "\n")
-            f.write(final_reply)
-        print("[Service] Usage data:", usage_data)
-
     return jsonify(response_payload), 200
+
 
 
 ##############################################################################
@@ -376,6 +216,12 @@ def parse_args():
     parser.add_argument("--thinking_n_ignore", type=int, default=2)
     parser.add_argument("--drafting_n", type=int, default=1)
     parser.add_argument("--small_first", action="store_true")
+    parser.add_argument("--placeholder_mode", action="store_true")
+    parser.add_argument("--logprob_subselect", action="store_true")
+    parser.add_argument("--sgen", type=int, default=8)
+    parser.add_argument("--stok", type=int, default=16)
+    parser.add_argument("--sdecay", type=int, default=2)
+    parser.add_argument("--ltok", type=int, default=0)
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
     parser.add_argument("--bloat_tokens", type=int, default=0)

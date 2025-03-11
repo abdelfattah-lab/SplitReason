@@ -81,6 +81,7 @@ def main():
                         help="Port for the spec_service Flask app.")
     parser.add_argument("--big_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
     parser.add_argument("--big_model_port", type=int, default=8000)
+    # parser.add_argument("--big_model_gpus", type=str, default="0")
     parser.add_argument("--big_model_gpus", type=str, default="0,1")
     parser.add_argument("--small_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
     parser.add_argument("--small_model_port", type=int, default=8001)
@@ -88,6 +89,12 @@ def main():
     parser.add_argument("--thinking_n_ignore", type=int, default=2)
     parser.add_argument("--drafting_n", type=int, default=1)
     parser.add_argument("--small_first", action="store_true")
+    parser.add_argument("--placeholder_mode", action="store_true")
+    parser.add_argument("--logprob_subselect", action="store_true")
+    parser.add_argument("--sgen", type=int, default=256)
+    parser.add_argument("--stok", type=int, default=16)
+    parser.add_argument("--sdecay", type=int, default=2)
+    parser.add_argument("--ltok", type=int, default=0)
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
     parser.add_argument("--bloat_tokens", type=int, default=0)
@@ -131,11 +138,19 @@ def main():
             f"--bloat_tokens={args.bloat_tokens}",
             f"--max_tokens={args.max_tokens}",
             f"--terminating_string={args.terminating_string}",
+            f"--sgen={args.sgen}",
+            f"--stok={args.stok}",
+            f"--sdecay={args.sdecay}",
+            f"--ltok={args.ltok}",
             "--port", str(args.service_port),
         ]
     # Handle optional args as before
     if args.small_first:
         cmd.append("--small_first")
+    if args.placeholder_mode:
+        cmd.append("--placeholder_mode")
+    if args.logprob_subselect:
+        cmd.append("--logprob_subselect")
     if args.full_rewrite:
         cmd.append("--full_rewrite")
     if args.draft_propose_ignore_str:
@@ -161,6 +176,12 @@ def main():
         "drafting_n": args.drafting_n,
         "full_rewrite": args.full_rewrite,
         "small_first": args.small_first,
+        "placeholder_mode": args.placeholder_mode,
+        "logprob_subselect": args.logprob_subselect,
+        "sgen": args.sgen,
+        "stok": args.stok,
+        "sdecay": args.sdecay,
+        "ltok": args.ltok,
         "bloat_tokens": args.bloat_tokens,
         "max_tokens": args.max_tokens,
         "terminating_string": args.terminating_string,
