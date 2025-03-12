@@ -1,4 +1,7 @@
 # modes/spec_rewrite.py
+import os
+import datetime
+
 
 def run_speculative_reason_flow(
     question,
@@ -117,13 +120,22 @@ def run_speculative_reason_flow(
 
         # If test logging is enabled, write out debug logs
         if test_logging:
-            draft_logs = "draft_logs"
+            draft_logs = "spec_rewrite_draft_logs"
             import os
             if not os.path.exists(draft_logs):
                 os.makedirs(draft_logs)
+            
+            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+            with open(f"{draft_logs}/arg_list_{timestamp}.txt", "w") as f:
+                for name, value in locals().items():
+                    f.write(f"{name} = {value}\n")
+
+            subfolder_path = f"{draft_logs}/{timestamp}"
+            os.makedirs(subfolder_path, exist_ok=True)
 
             write_model_name = model_name.split("/")[-1]
-            with open(f"{draft_logs}/{write_model_name}_iter{i+1}.txt", "w") as f:
+            with open(f"{subfolder_path}/{write_model_name}_iter{i+1}.txt", "w") as f:
                 f.write("\n" + "-" * 80 + "\n" + "Iteration Prompt\n" + "-" * 80 + "\n")
                 f.write(iteration_prompt)
                 f.write("\n\n" + "-" * 80 + "\nRaw Reply\n" + "-" * 80 + "\n")
@@ -194,7 +206,7 @@ def run_speculative_reason_flow(
 
                 if test_logging:
                     write_model_name = small_model.split("/")[-1]
-                    with open(f"{draft_logs}/{write_model_name}_iter{i+1}_draft{d_i+1}.txt", "w") as f:
+                    with open(f"{subfolder_path}/{write_model_name}_iter{i+1}_draft{d_i+1}.txt", "w") as f:
                         f.write("\n" + "-" * 80 + "\n" + "Prompt For Drafting\n" + "-" * 80 + "\n")
                         f.write(prompt_for_draft)
                         f.write("\n\n" + "-" * 80 + "\nRe-drafted Prompt\n" + "-" * 80 + "\n")
@@ -217,7 +229,7 @@ def run_speculative_reason_flow(
             cot_accumulator += partial_cot + wait_str
 
         if test_logging:
-            with open(f"{draft_logs}/cot_step_{i+1}.txt", "w") as f:
+            with open(f"{subfolder_path}/cot_step_{i+1}.txt", "w") as f:
                 f.write(cot_accumulator)
 
     # -------------------------------------------

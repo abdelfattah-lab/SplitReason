@@ -2,6 +2,9 @@ import traceback
 from typing import List, Tuple
 import random
 from tqdm import tqdm
+import os
+import datetime
+
 
 # python test_spec.py  --logprob_subselect --stok 256 --sgen 32 --sdecay 2 --ltok 16 --lbound 2
 
@@ -51,7 +54,11 @@ def eval_logprob_vllm(
             token_logprobs = logprob_info.get("token_logprobs", [])
             # Filter out None (sometimes found in the returned array)
             token_logprobs = [p for p in token_logprobs if p is not None]
-            prompt_ll = sum(token_logprobs) if len(token_logprobs) > 0 else 0.0
+            # prompt_ll = sum(token_logprobs) if len(token_logprobs) > 0 else 0.0
+            if len(token_logprobs) > 0:
+                prompt_ll =  sum(token_logprobs) / len(token_logprobs)
+            else:
+                prompt_ll = 0.0
             scores.append(prompt_ll)
             gentexts.append(generated_text)
 
@@ -115,10 +122,19 @@ def run_logprob_subselect_flow(
     """
 
     if test_logging:
-        draft_logs = "draft_logs"
+        draft_logs = "logprob_subselect_draft_logs"
         import os
         if not os.path.exists(draft_logs):
             os.makedirs(draft_logs)
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+        with open(f"{draft_logs}/arg_list_{timestamp}.txt", "w") as f:
+            for name, value in locals().items():
+                f.write(f"{name} = {value}\n")
+
+        subfolder_path = f"{draft_logs}/{timestamp}"
+        os.makedirs(subfolder_path, exist_ok=True)
 
     # 1) We enforce ltok > 0
     if ltok <= 0:
@@ -173,9 +189,15 @@ def run_logprob_subselect_flow(
             print(f"--- BigModel Continuation {i+1} ---")
             print(big_gen)
             print("\n\n")
+        sort_by_score = sorted(zip(new_candidates, scores, big_generations), key=lambda x: x[1], reverse=True)
+        for i, (cand, score, big_gen) in enumerate(sort_by_score):
             if test_logging:
+                if i == 0:
+                    mode = "w"
+                else:
+                    mode = "a"
                 write_model_name = big_model.split("/")[-1]
-                with open(f"{draft_logs}/{write_model_name}_iter{iteration_count}.txt", "a") as f:
+                with open(f"{subfolder_path}/{write_model_name}_iter{iteration_count}.txt", mode) as f:
                     f.write("\n" + "-" * 80 + "\n" + "Candidate\t \t Score: " + str(score) + "\n" + "-" * 80 + "\n")
                     f.write(cand)
                     f.write("\n" + "-" * 80 + "\n" + "BigModel Continuation\n" + "-" * 80 + "\n")

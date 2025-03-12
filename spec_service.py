@@ -12,6 +12,8 @@ from flask import Flask, request, jsonify
 from modes.spec_rewrite import run_speculative_reason_flow
 from modes.placeholder import run_placeholder_flow
 from modes.logprob_subselect import run_logprob_subselect_flow
+from modes.small_model_only import run_smallmodel_flow
+from modes.big_model_only import run_bigmodel_flow
 
 app = Flask(__name__)
 
@@ -126,7 +128,7 @@ def speculative_reason():
     question = data["question"]
     test_logging = data.get("test_logging", False)
 
-    # Pull out all the relevant arguments from JSON or fallback to service_args
+    # Grab all the usual arguments (or use defaults from CLI)
     thinking_n_ignore = data.get("thinking_n_ignore", service_args.thinking_n_ignore)
     drafting_n = data.get("drafting_n", service_args.drafting_n)
     full_rewrite = data.get("full_rewrite", service_args.full_rewrite)
@@ -137,33 +139,33 @@ def speculative_reason():
     small_first = data.get("small_first", service_args.small_first)
     bloat_tokens = data.get("bloat_tokens", service_args.bloat_tokens)
 
-    # Decide which flow to run
     if data.get("placeholder_mode", False):
-        # Run the "placeholder" single-call flow
         final_reply, usage_data = run_placeholder_flow(
-            question,
+            question=question,
             big_model=service_args.big_model,
             big_model_port=service_args.big_model_port,
             small_model=service_args.small_model,
             small_model_port=service_args.small_model_port,
-            generate_text_vllm=generate_text_vllm,  # same function from spec_service
+            generate_text_vllm=generate_text_vllm,
             max_tokens=max_tokens,
             temperature=temperature
         )
-
+    elif data.get("small_model_only", False):
+        final_reply, usage_data = run_smallmodel_flow(
+            question=question,
+            small_model=service_args.small_model,
+            small_model_port=service_args.small_model_port,
+            generate_text_vllm=generate_text_vllm,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
     elif data.get("logprob_subselect", False):
-        sgen = data.get("sgen", 8)      # number of parallel expansions in small model
-        stok = data.get("stok", 16)     # how many tokens small model generates each time
-        sdecay = data.get("sdecay", 2)  # how many expansions to discard fractionally
-        ltok = data.get("ltok", 0)      # how many tokens big model adds each iteration
-        lbound = data.get("lbound", 8)
-
         final_reply, usage_data = run_logprob_subselect_flow(
             question=question,
-            sgen=sgen,
-            stok=stok,
-            sdecay=sdecay,
-            ltok=ltok,
+            sgen=data.get("sgen", service_args.sgen),
+            stok=data.get("stok", service_args.stok),
+            sdecay=data.get("sdecay", service_args.sdecay),
+            ltok=data.get("ltok", service_args.ltok),
             max_tokens=max_tokens,
             temperature=temperature,
             big_model=service_args.big_model,
@@ -171,36 +173,35 @@ def speculative_reason():
             small_model=service_args.small_model,
             small_model_port=service_args.small_model_port,
             requests=requests,
-            terminating_string=terminating_string,
             generate_text_vllm=generate_text_vllm,
-            lbound=service_args.lbound,
-            test_logging=test_logging
+            terminating_string=terminating_string,
+            test_logging=test_logging,
+            lbound=data.get("lbound", service_args.lbound)
         )
-
-    else:
-        # Use the original multi-step speculative reasoning approach
+    elif data.get("spec_rewrite", False):
         final_reply, usage_data = run_speculative_reason_flow(
-            question,
-            test_logging,
-            thinking_n_ignore,
-            drafting_n,
-            full_rewrite,
-            temperature,
-            max_tokens,
-            terminating_string,
-            draft_propose_ignore_str,
-            small_first,
-            service_args.big_model_port,
-            service_args.big_model,
-            service_args.small_model_port,
-            service_args.small_model,
-            bloat_tokens,
-            generate_text_vllm,
-            extract_cot,
-            service_args
+            question=question,
+            test_logging=test_logging,
+            thinking_n_ignore=thinking_n_ignore,
+            drafting_n=drafting_n,
+            full_rewrite=full_rewrite,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            terminating_string=terminating_string,
+            draft_propose_ignore_str=draft_propose_ignore_str,
+            small_first=small_first,
+            big_model_port=service_args.big_model_port,
+            big_model=service_args.big_model,
+            small_model_port=service_args.small_model_port,
+            small_model=service_args.small_model,
+            bloat_tokens=bloat_tokens,
+            generate_text_vllm=generate_text_vllm,
+            extract_cot=extract_cot,
+            service_args=service_args
         )
+    else:
+        return jsonify({"error": "Invalid mode specified in JSON payload"}), 400
 
-    # Build final JSON response
     response_payload = {
         "final_answer": final_reply,
         "usage_records": usage_data
@@ -223,19 +224,29 @@ def parse_args():
     parser.add_argument("--small_model_port", type=int, default=8001)
     parser.add_argument("--small_model_gpus", type=str, default="2")
 
-    parser.add_argument("--thinking_n_ignore", type=int, default=2)
-    parser.add_argument("--drafting_n", type=int, default=1)
-    parser.add_argument("--small_first", action="store_true")
+    ### Modes, only 1 can be true ###
     parser.add_argument("--placeholder_mode", action="store_true")
+    parser.add_argument("--spec_rewrite", action="store_true")
     parser.add_argument("--logprob_subselect", action="store_true")
+    parser.add_argument("--big_model_only", action="store_true")
+    parser.add_argument("--small_model_only", action="store_true")
+    ### End Of Modes, only 1 can be true ###
+    parser.add_argument("--test_logging", action="store_true")
+    ### LogProb Subselect Args ###
     parser.add_argument("--sgen", type=int, default=8)
     parser.add_argument("--stok", type=int, default=16)
     parser.add_argument("--sdecay", type=int, default=2)
     parser.add_argument("--ltok", type=int, default=0)
     parser.add_argument("--lbound", type=int, default=4)
+    ### End Of LogProb Subselect Args ###
+    ### Spec Rewrite Args ###
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
     parser.add_argument("--bloat_tokens", type=int, default=0)
+    parser.add_argument("--thinking_n_ignore", type=int, default=2)
+    parser.add_argument("--drafting_n", type=int, default=1)
+    parser.add_argument("--small_first", action="store_true")
+    ### End Of Spec Rewrite Args ###
     parser.add_argument("--max_tokens", type=int, default=16384)
     parser.add_argument("--terminating_string", type=str, default="\nPut your final answer within \\boxed{}.")
     parser.add_argument("--terminate_on_exit", action="store_true",

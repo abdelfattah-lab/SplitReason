@@ -43,6 +43,32 @@ except ModuleNotFoundError:
 if TYPE_CHECKING:
     pass
 
+def parse_value(s: str):
+    """
+    Attempt to parse a string as bool -> int -> float -> string.
+    """
+    # 1) Check for booleans
+    lowered = s.lower().strip()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    return s
+
+def coerce_all_types(param_dict: dict) -> dict:
+    out = {}
+    for key, val in param_dict.items():
+        if isinstance(val, str):
+            out[key] = parse_value(val)
+        else:
+            out[key] = val
+    return out
 
 class FakeGenerateOutput:
     def __init__(self, text: str):
@@ -101,7 +127,22 @@ class SpeculativeVLLM(TemplateLM):
 
         self.service_host = speculative_reasoner_host
         self.service_port = speculative_reasoner_port
-        self.service_params = kwargs
+        self.service_params = coerce_all_types(kwargs)
+
+        # after that, read out each new param, with defaults, e.g.:
+        self.placeholder_mode = self.service_params.get("placeholder_mode", False)
+        self.spec_rewrite = self.service_params.get("spec_rewrite", False)
+        self.logprob_subselect = self.service_params.get("logprob_subselect", False)
+        self.big_model_only = self.service_params.get("big_model_only", False)
+        self.small_model_only = self.service_params.get("small_model_only", False)
+
+        # likewise for numeric fields:
+        self.sgen = self.service_params.get("sgen", 256)
+        self.stok = self.service_params.get("stok", 16)
+        self.sdecay = self.service_params.get("sdecay", 2)
+        self.ltok = self.service_params.get("ltok", 16)
+        self.lbound = self.service_params.get("lbound", 4)
+
 
         self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
         self._ensure_correct_service_is_running()
@@ -145,6 +186,8 @@ class SpeculativeVLLM(TemplateLM):
         )
 
     def _ensure_correct_service_is_running(self):
+        kill_cmd = "fuser -k -9 /dev/nvidia*"
+        subprocess.run(kill_cmd, shell=True)
         ping_url = f"http://{self.service_host}:{self.service_port}/ping"
         if self._ping_service(ping_url):
             eval_logger.info(f"[SpeculativeVLLM] Service is already running; attempting shutdown.")
@@ -197,17 +240,32 @@ class SpeculativeVLLM(TemplateLM):
             f"--bloat_tokens={bloat_tokens}",
             f"--max_tokens={max_tokens}",
             f"--terminating_string={terminating_string}",
+            f"--sgen={self.sgen}",
+            f"--stok={self.stok}",
+            f"--sdecay={self.sdecay}",
+            f"--ltok={self.ltok}",
+            f"--lbound={self.lbound}",
             "--port", str(self.service_port),
         ]
 
         if self.service_params.get("small_first", False):
             cmd.append("--small_first")
+        if self.service_params.get("spec_rewrite", False):
+            cmd.append("--spec_rewrite")
+        if self.service_params.get("logprob_subselect", False):
+            cmd.append("--logprob_subselect")
+        if self.service_params.get("big_model_only", False):
+            cmd.append("--big_model_only")
+        if self.service_params.get("small_model_only", False):
+            cmd.append("--small_model_only")
         if self.service_params.get("full_rewrite", False):
             cmd.append("--full_rewrite")
         if self.service_params.get("draft_propose_ignore_str", False):
             cmd.append("--draft_propose_ignore_str")
         if self.service_params.get("terminate_on_exit", False):
             cmd.append("--terminate_on_exit")
+        if self.service_params.get("test_logging", False):
+            cmd.append("--test_logging")
 
         eval_logger.info(f"[SpeculativeVLLM] Launching: {' '.join(cmd)}")
         env = os.environ.copy()
