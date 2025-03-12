@@ -159,6 +159,15 @@ def speculative_reason():
             max_tokens=max_tokens,
             temperature=temperature
         )
+    elif data.get("big_model_only", False):
+        final_reply, usage_data = run_bigmodel_flow(
+            question=question,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            generate_text_vllm=generate_text_vllm,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
     elif data.get("logprob_subselect", False):
         final_reply, usage_data = run_logprob_subselect_flow(
             question=question,

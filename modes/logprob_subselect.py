@@ -4,9 +4,12 @@ import random
 from tqdm import tqdm
 import os
 import datetime
-
+import time
 
 # python test_spec.py  --logprob_subselect --stok 256 --sgen 32 --sdecay 2 --ltok 16 --lbound 2
+
+### CAN WE DO SLIDING WINDOW WITH QUESTION ANCHOR TOKENS FOR LOGPROB EVAL ON LARGE MODELS
+
 
 def eval_logprob_vllm(
     text_batch: List[str],
@@ -27,6 +30,7 @@ def eval_logprob_vllm(
     scores = []
     gentexts = []
     url = f"http://localhost:{big_model_port}/v1/completions"
+    big_model_gen_latencies = []
 
     for text in tqdm(text_batch):
         try:
@@ -36,10 +40,12 @@ def eval_logprob_vllm(
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "logprobs": logprobs,
-                # "echo": True   # If you need token-level breakdown of the prompt
             }
+            start_time = time.time()
             resp = requests.post(url, json=payload)
             resp.raise_for_status()
+            end_time = time.time()
+            big_model_gen_latencies.append(end_time - start_time)
             resp_json = resp.json()
 
             generated_text = resp_json["choices"][0]["text"]
@@ -63,13 +69,18 @@ def eval_logprob_vllm(
             gentexts.append(generated_text)
 
         except Exception as e:
+            import pdb; pdb.set_trace()
             traceback.print_exc()
             print("\n\n[WARNING]: Using Random Log-Prob Assignment, "
                   f"failed to get logprobs for text: {text}\n\n")
             scores.append(random.random())
             gentexts.append("")
-
-    return scores, gentexts
+    try:
+        avg_latency = sum(big_model_gen_latencies) / len(big_model_gen_latencies)
+    except:
+        import pdb; pdb.set_trace()
+    num_requests = len(text_batch)
+    return scores, gentexts, avg_latency, num_requests
 
 
 def run_logprob_subselect_flow(
@@ -153,13 +164,14 @@ def run_logprob_subselect_flow(
 
     iteration_count = 0
 
+    small_model_generations = {}
     while len(prompt_batch) > 1 and iteration_count < max_iterations:
         iteration_count += 1
+        model_generation_latencies = {"small_model": [], "big_model": []}
 
-        # --- Step 1) Small model generation: stok tokens for each prompt
+        small_model_generations[iteration_count] = []
         new_candidates = []
         for prompt_text in prompt_batch:
-            # Generate stok tokens from the small model (1 sample per prompt here)
             partial_resp, latency = generate_text_vllm(
                 prompt_text,
                 port=small_model_port,
@@ -168,11 +180,11 @@ def run_logprob_subselect_flow(
                 model=small_model,
             )
             raw_reply = partial_resp["choices"][0]["text"]
+            small_model_generations[iteration_count].append(raw_reply)
             new_candidates.append(prompt_text + raw_reply)
+            model_generation_latencies["small_model"].append(latency)
 
-        # --- Step 4) Large model expansions (ltok tokens)
-        #     (We "always" do this now that ltok>0 is required)
-        scores, big_generations = eval_logprob_vllm(
+        scores, big_generations, avg_latency, num_req_logprobs = eval_logprob_vllm(
             new_candidates,
             big_model_port=big_model_port,
             big_model=big_model,
@@ -182,24 +194,20 @@ def run_logprob_subselect_flow(
             logprobs=1
         )
 
-        # Nicely print the new candidates, their scores and the big_generations in a for loop for each candidate
-        for i, (cand, score, big_gen) in enumerate(zip(new_candidates, scores, big_generations)):
-            print(f"--- Candidate {i+1} \t \t Score: {score} ---")
-            print(cand)
-            print(f"--- BigModel Continuation {i+1} ---")
-            print(big_gen)
-            print("\n\n")
-        sort_by_score = sorted(zip(new_candidates, scores, big_generations), key=lambda x: x[1], reverse=True)
-        for i, (cand, score, big_gen) in enumerate(sort_by_score):
-            if test_logging:
-                if i == 0:
-                    mode = "w"
-                else:
-                    mode = "a"
+        if test_logging:
+            for i, (cand, score, big_gen) in enumerate(zip(new_candidates, scores, big_generations)):
+                print(f"--- Candidate {i+1} \t \t Score: {score} ---")
+                print(small_model_generations[iteration_count][i])
+                print(f"--- BigModel Continuation {i+1} ---")
+                print(big_gen)
+                print("\n\n")
+            sort_by_score = sorted(zip(new_candidates, scores, big_generations), key=lambda x: x[1], reverse=True)
+            for i, (cand, score, big_gen) in enumerate(sort_by_score):
+                mode = "w" if i == 0 else "a"
                 write_model_name = big_model.split("/")[-1]
                 with open(f"{subfolder_path}/{write_model_name}_iter{iteration_count}.txt", mode) as f:
                     f.write("\n" + "-" * 80 + "\n" + "Candidate\t \t Score: " + str(score) + "\n" + "-" * 80 + "\n")
-                    f.write(cand)
+                    f.write(small_model_generations[iteration_count][i])
                     f.write("\n" + "-" * 80 + "\n" + "BigModel Continuation\n" + "-" * 80 + "\n")
                     f.write(big_gen)
                     f.write("\n\n")
@@ -223,7 +231,7 @@ def run_logprob_subselect_flow(
             if n_with_think > len(prompt_batch) / 2:
                 # If the majority have </think>, we finalize:
                 #  Evaluate logprob again so we pick the single best
-                final_scores, final_gen = eval_logprob_vllm(
+                final_scores, final_gen, avg_latency, num_req_logprobs = eval_logprob_vllm(
                     prompt_batch,
                     big_model_port=big_model_port,
                     big_model=big_model,
@@ -234,51 +242,16 @@ def run_logprob_subselect_flow(
                 )
                 final_scored = list(zip(prompt_batch, final_scores, final_gen))
                 final_scored.sort(key=lambda x: x[1], reverse=True)
-                # Keep the single best
+                # Keep the single best and 'add' the new big model generation to avoid waste.
                 prompt_batch = [final_scored[0][0] + final_scored[0][2]]
                 break
             else:
-                # Otherwise, we "double" the variants using the small model
-                # We'll generate 2 expansions per candidate, for example.
-                doubled_candidates = []
-                for prompt_text in prompt_batch:
-                    # generate 2 expansions from the small model
-                    for _ in range(2):
-                        partial_resp, latency = generate_text_vllm(
-                            prompt_text,
-                            port=small_model_port,
-                            temperature=temperature,
-                            max_tokens=stok,
-                            model=small_model,
-                        )
-                        raw_reply = partial_resp["choices"][0]["text"]
-                        doubled_candidates.append(prompt_text + raw_reply)
-                # Evaluate them all and keep the top again:
-                d_scores, _ = eval_logprob_vllm(
-                    doubled_candidates,
-                    big_model_port=big_model_port,
-                    big_model=big_model,
-                    requests=requests,
-                    temperature=0.0,
-                    max_tokens=0,
-                    logprobs=1
-                )
-                scored_doubled = list(zip(doubled_candidates, d_scores))
-                scored_doubled.sort(key=lambda x: x[1], reverse=True)
-                # Maybe we revert to the "original beam size" or keep 2*lbound, etc.
-                # For simplicity, let's just keep sgen if you want to push the beam back up:
-                n_keep2 = min(len(scored_doubled), sgen)
-                prompt_batch = [x[0] for x in scored_doubled[:n_keep2]]
+                # double up the prompt_batch for next loop (duplicate each)
+                prompt_batch = [x for x in prompt_batch for _ in range(2)]
 
-        # If the batch still has more than 1 candidate, we continue the loop
-        # Possibly we break if iteration_count hits max_iterations
-
-    # If we exit the loop with a single final candidate, that is our best text.
+    # There is a good chance that END OF COT has already been reached
+    # Because the highest likelihood will be the one which has concluded (?)
     final_answer = prompt_batch[0]
-
-    # Optionally, do a final completion with the big model for the rest of the tokens
-    # If you want to ensure you haven't exceeded max_tokens, you might measure how many
-    # tokens we've consumed so far, etc. Here, we do a naive approach:
     tokens_used = len(final_answer.split())
     remaining_tokens = max_tokens - tokens_used
     if remaining_tokens > 0:
@@ -291,5 +264,17 @@ def run_logprob_subselect_flow(
         )
         final_text = final_resp["choices"][0]["text"]
         final_answer += final_text
+    else:
+        final_text = ""
+        if test_logging:
+            with open(f"{subfolder_path}/final_text.txt", "w") as f:
+                f.write(f"NO FINAL TEXT due to max_tokens: {max_tokens} - tokens_used: {tokens_used} = {remaining_tokens}")
+
+    if test_logging:
+        with open(f"{subfolder_path}/final_text.txt", "w") as f:
+            f.write(final_text)
+
+        with open(f"{subfolder_path}/full_trace.txt", "w") as f:
+            f.write(final_answer)
 
     return final_answer, usage_data

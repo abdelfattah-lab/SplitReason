@@ -215,7 +215,6 @@ def main():
         "test_logging": args.test_logging,
         "draft_propose_ignore_str": args.draft_propose_ignore_str,
     }
-    
     print(f"[test_spec] Sending request with payload = {payload}")
     resp = requests.post(url, json=payload)
     resp.raise_for_status()
