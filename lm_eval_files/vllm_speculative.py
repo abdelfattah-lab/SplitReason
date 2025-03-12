@@ -125,6 +125,8 @@ class SpeculativeVLLM(TemplateLM):
         """
         super().__init__()
 
+        kill_cmd = "fuser -k -9 /dev/nvidia*"
+        subprocess.run(kill_cmd, shell=True)
         self.service_host = speculative_reasoner_host
         self.service_port = speculative_reasoner_port
         self.service_params = coerce_all_types(kwargs)
@@ -186,8 +188,6 @@ class SpeculativeVLLM(TemplateLM):
         )
 
     def _ensure_correct_service_is_running(self):
-        kill_cmd = "fuser -k -9 /dev/nvidia*"
-        subprocess.run(kill_cmd, shell=True)
         ping_url = f"http://{self.service_host}:{self.service_port}/ping"
         if self._ping_service(ping_url):
             eval_logger.info(f"[SpeculativeVLLM] Service is already running; attempting shutdown.")

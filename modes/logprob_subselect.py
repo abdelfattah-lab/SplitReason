@@ -32,7 +32,7 @@ def eval_logprob_vllm(
     url = f"http://localhost:{big_model_port}/v1/completions"
     big_model_gen_latencies = []
 
-    for text in tqdm(text_batch):
+    for text in text_batch:
         try:
             payload = {
                 "model": big_model,
@@ -251,7 +251,7 @@ def run_logprob_subselect_flow(
 
     # There is a good chance that END OF COT has already been reached
     # Because the highest likelihood will be the one which has concluded (?)
-    final_answer = prompt_batch[0]
+    final_answer = prompt_batch[0]  + "\n So, the answer would be: "
     tokens_used = len(final_answer.split())
     remaining_tokens = max_tokens - tokens_used
     if remaining_tokens > 0:

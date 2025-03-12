@@ -4,14 +4,18 @@ export $(grep -v '^#' .env | xargs)
 
 export VLLM_WORKER_MULTIPROC_METHOD='spawn'
 export PROCESSOR=gpt-4o-mini
+export VLLM_CONFIGURE_LOGGING=1
+export VLLM_LOGGING_CONFIG_PATH=logging_config.json
+##### RUN THIS BEFORE STARTING NEW JOBS #####
+fuser -k -9 /dev/nvidia*
+##### RUN THIS BEFORE STARTING NEW JOBS #####
 
 # Logprob subselect on 1.5B Qwen model with 14B guide
 time python -m lm_eval --model vllm_speculative \
   --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B,big_model_port=8000,big_model_gpus=1|2,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=0,max_tokens=16384,stok=256,sgen=16,sdecay=2,ltok=16,lbound=2,logprob_subselect=True" \
-    --tasks aime24_nofigures \
-    --batch_size auto --apply_chat_template \
-    --output_path log_traces/basic --log_samples --gen_kwargs max_gen_toks=2048
-
+  --tasks aime24_nofigures --batch_size auto --apply_chat_template --output_path log_traces/logprob_subset --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" --limit 2
+  
+  
 # time python -m lm_eval --model vllm_speculative \
 #   --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=0|1,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,small_model_port=8001,small_model_gpus=1,thinking_n_ignore=0,drafting_n=0,full_rewrite=True,bloat_tokens=0,max_tokens=16384,terminate_on_exit=True" \
 #     --tasks aime24_nofigures \

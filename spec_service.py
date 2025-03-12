@@ -45,6 +45,7 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
+        "--uvicorn-log-level=warning",
         # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
         "--enable-chunked-prefill"
@@ -64,6 +65,7 @@ def launch_small_model(model_name, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
+        "--uvicorn-log-level=warning",
         # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
         # "--enable-chunked-prefill"
