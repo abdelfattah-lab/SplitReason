@@ -156,8 +156,14 @@ def run_logprob_subselect_flow(
     model_think_prefix = "<think>\n"
     model_think_suffix = "</think>"
 
-    # Start with a single shared prompt
-    base_prompt = f"<user>\n{question}. {terminating_string}\n<assistant>\n{model_think_prefix}"
+    # # Start with a single shared prompt
+    # base_prompt = f"<user>\n{question}. {terminating_string}\n<assistant>\n{model_think_prefix}"
+
+    # Basic prompt
+    if "｜" not in question:
+        prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
+    else:
+        prompt = f"{question}{terminating_string}\n{model_think_prefix}"
 
     # For the first step, replicate that prompt sgen times
     prompt_batch = [base_prompt for _ in range(sgen)]
@@ -269,7 +275,7 @@ def run_logprob_subselect_flow(
         if test_logging:
             with open(f"{subfolder_path}/final_text.txt", "w") as f:
                 f.write(f"NO FINAL TEXT due to max_tokens: {max_tokens} - tokens_used: {tokens_used} = {remaining_tokens}")
-
+    print("final_text: ", final_text)
     if test_logging:
         with open(f"{subfolder_path}/final_text.txt", "w") as f:
             f.write(final_text)

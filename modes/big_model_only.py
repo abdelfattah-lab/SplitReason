@@ -35,7 +35,11 @@ def run_bigmodel_flow(
         os.makedirs(subfolder_path, exist_ok=True)
 
     # Basic prompt
-    prompt = f"<|user|>\n{question}\n<|assistant|>\n"
+    if "｜" not in question:
+        prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
+    else:
+        prompt = f"{question}{terminating_string}\n{model_think_prefix}"
+
     print("Sending request to big model")
     # Single big model request
     resp_json, latency = generate_text_vllm(

@@ -22,7 +22,11 @@ def run_placeholder_flow(
     usage_data = []
 
     # Basic prompt
-    prompt = f"<|user|>\n{question}\n<|assistant|>\n"
+    if "｜" not in question:
+        prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}<｜Assistant｜>"
+    else:
+        prompt = f"{question}"
+
     print("Sending request to big model")
     # Single big model request
     resp_json, latency_big = generate_text_vllm(
