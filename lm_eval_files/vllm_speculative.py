@@ -16,6 +16,8 @@ Usage:
 import copy
 import requests
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
 
 import os
 import time
@@ -125,8 +127,8 @@ class SpeculativeVLLM(TemplateLM):
         """
         super().__init__()
 
-        kill_cmd = "fuser -k -9 /dev/nvidia*"
-        subprocess.run(kill_cmd, shell=True)
+        # kill_cmd = "fuser -k -9 /dev/nvidia*"
+        # subprocess.run(kill_cmd, shell=True)
         self.service_host = speculative_reasoner_host
         self.service_port = speculative_reasoner_port
         self.service_params = coerce_all_types(kwargs)
@@ -144,6 +146,7 @@ class SpeculativeVLLM(TemplateLM):
         self.sdecay = self.service_params.get("sdecay", 2)
         self.ltok = self.service_params.get("ltok", 16)
         self.lbound = self.service_params.get("lbound", 4)
+        self.max_iterations = self.service_params.get("max_iterations", 10)
 
 
         self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
@@ -245,6 +248,7 @@ class SpeculativeVLLM(TemplateLM):
             f"--sdecay={self.sdecay}",
             f"--ltok={self.ltok}",
             f"--lbound={self.lbound}",
+            f"--max_iterations={self.max_iterations}",
             "--port", str(self.service_port),
         ]
 
@@ -374,30 +378,71 @@ class SpeculativeVLLM(TemplateLM):
         """
 
         if generate:
-            completions = []
-            req_idx = 0
-            for token_ids in tqdm(encoded_prompts, desc="Sending service requests"):
-                prompt_text = self.tokenizer.decode(token_ids)
-                print(f"\n\n Request {req_idx}:\n{prompt_text}\n\n")
-                req_idx += 1
+            url = f"http://{self.service_host}:{self.service_port}/speculative_reason"
+
+            # We'll store the final answers in the same order as encoded_prompts
+            completions = [None] * len(encoded_prompts)
+
+            # A helper function that sends one POST request
+            def _send_request(prompt_text: str, index: int):
                 payload = {
                     "question": prompt_text,
                     "max_tokens": max_tokens if max_tokens else self._max_gen_toks,
                 }
                 if stop:
+                    # If you only have one stop token, we do e.g. stop[-1]
                     payload["terminating_string"] = stop[-1]
 
                 payload.update(self.service_params)
                 payload.update(kwargs)
 
-                url = f"http://{self.service_host}:{self.service_port}/speculative_reason"
                 resp = requests.post(url, json=payload)
                 resp.raise_for_status()
                 final_answer = resp.json().get("final_answer", "")
+                return index, final_answer
 
-                completions.append(FakeGenerateOutput(final_answer))
+            # Submit all requests in parallel:
+            futures = []
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                for idx, token_ids in enumerate(encoded_prompts):
+                    prompt_text = self.tokenizer.decode(token_ids)
+                    # Print or track debug info:
+                    print(f"\n\n Request {idx}:\n{prompt_text}\n\n")
+
+                    fut = executor.submit(_send_request, prompt_text, idx)
+                    futures.append(fut)
+
+                # Gather results as they complete:
+                for fut in as_completed(futures):
+                    idx, final_answer = fut.result()
+                    completions[idx] = FakeGenerateOutput(final_answer)
 
             return completions
+
+        #     completions = []
+        #     req_idx = 0
+        #     for token_ids in tqdm(encoded_prompts, desc="Sending service requests"):
+        #         prompt_text = self.tokenizer.decode(token_ids)
+        #         print(f"\n\n Request {req_idx}:\n{prompt_text}\n\n")
+        #         req_idx += 1
+        #         payload = {
+        #             "question": prompt_text,
+        #             "max_tokens": max_tokens if max_tokens else self._max_gen_toks,
+        #         }
+        #         if stop:
+        #             payload["terminating_string"] = stop[-1]
+
+        #         payload.update(self.service_params)
+        #         payload.update(kwargs)
+
+        #         url = f"http://{self.service_host}:{self.service_port}/speculative_reason"
+        #         resp = requests.post(url, json=payload)
+        #         resp.raise_for_status()
+        #         final_answer = resp.json().get("final_answer", "")
+
+        #         completions.append(FakeGenerateOutput(final_answer))
+
+        #     return completions
 
         else:
             logprob_outputs = []

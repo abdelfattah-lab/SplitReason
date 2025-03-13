@@ -13,7 +13,8 @@ def run_placeholder_flow(
     small_model_port,
     generate_text_vllm,
     max_tokens=1024,
-    temperature=0.7
+    temperature=0.7,
+    test_logging: bool = False,
 ):
     """
     A baseline 'placeholder' flow: we just send a single request to the

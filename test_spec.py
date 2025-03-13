@@ -86,6 +86,8 @@ def main():
     parser.add_argument("--small_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
     parser.add_argument("--small_model_port", type=int, default=8001)
     parser.add_argument("--small_model_gpus", type=str, default="0")
+    ### Sequential scaling of big/small/logprob modes
+    parser.add_argument("--sequential_scale", type=int, default=0)
     ### Modes, only 1 can be true ###
     parser.add_argument("--placeholder_mode", action="store_true")
     parser.add_argument("--spec_rewrite", action="store_true")
@@ -99,6 +101,7 @@ def main():
     parser.add_argument("--sdecay", type=int, default=2)
     parser.add_argument("--ltok", type=int, default=16)
     parser.add_argument("--lbound", type=int, default=4)
+    parser.add_argument("--max_iterations", type=int, default=None, help="Maximum number of iterations, closesly controls max token budget.")
     ### End Of LogProb Subselect Args ###
     ### Spec Rewrite Args ###
     parser.add_argument("--full_rewrite", action="store_true")
@@ -116,6 +119,9 @@ def main():
                         help="Path to the spec_service.py script.")
 
     args = parser.parse_args()
+
+    if args.max_iterations is None:
+        args.max_iterations = 32768 // (args.stok * args.ltok)
     
     if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only]) != 1:
         print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, logprob_subselect, big_model_only, small_model_only should be True.")
@@ -159,7 +165,9 @@ def main():
             f"--sdecay={args.sdecay}",
             f"--ltok={args.ltok}",
             f"--lbound={args.lbound}",
+            f"--max_iterations={args.max_iterations}",
             "--port", str(args.service_port),
+            "--sequential_scale", str(args.sequential_scale)
         ]
     # Handle optional args as before
     if args.small_first:
@@ -209,11 +217,13 @@ def main():
         "sdecay": args.sdecay,
         "ltok": args.ltok,
         "lbound": args.lbound,
+        "max_iterations": args.max_iterations,
         "bloat_tokens": args.bloat_tokens,
         "max_tokens": args.max_tokens,
         "terminating_string": args.terminating_string,
         "test_logging": args.test_logging,
         "draft_propose_ignore_str": args.draft_propose_ignore_str,
+        "sequential_scale": args.sequential_scale,
     }
     print(f"[test_spec] Sending request with payload = {payload}")
     resp = requests.post(url, json=payload)
