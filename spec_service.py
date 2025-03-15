@@ -374,6 +374,180 @@ def speculative_reason():
     }
     return jsonify(response_payload), 200
 
+@app.route("/think_summarize", methods=["POST"])
+def think_summarize():
+    """
+    This endpoint implements a different reasoning approach where the model:
+    1. Thinks for a while (generates some tokens)
+    2. Summarizes its thoughts
+    3. Uses these summaries for the next round of thinking
+    4. Repeats this process multiple times
+    5. Generates a final answer based on the accumulated summaries
+
+    Sample JSON POST to /think_summarize:
+        {
+          "question": "What is 2+2?",
+          "think_tokens": 200,
+          "num_rounds": 3,
+          "max_tokens": 1024,
+          "temperature": 0.7,
+          "debug_prompts": true,
+          "terminating_string": "\\nFinal Answer"
+        }
+    """
+    data = request.json
+    if not data or "question" not in data:
+        return jsonify({"error": "Missing 'question' in JSON payload"}), 400
+
+    question = data["question"]
+    test_logging = data.get("test_logging", False)
+    if test_logging:
+        draft_logs = "draft_logs"
+        if not os.path.exists(draft_logs):
+            os.makedirs(draft_logs)
+        print(f"[Service] test_logging=True; extra debug for question: {question}")
+
+    # Get parameters with defaults
+    think_tokens = data.get("think_tokens", 200)
+    num_rounds = data.get("num_rounds", 3)
+    temperature = data.get("temperature", 0.6)
+    max_tokens = data.get("max_tokens", service_args.max_tokens)
+    terminating_string = data.get("terminating_string", service_args.terminating_string)
+    debug_prompts = data.get("debug_prompts", False)
+
+    # Basic prompt for user query
+    base_prompt = f"<|user|>\n{question}\n<|assistant|>\n"
+
+    # Big model format for thinking
+    if "simplescaling" in service_args.big_model:
+        big_model_think_prefix = "<|im_start|>think\n"
+        big_model_think_suffix = "<|im_start|>answer"
+    elif "deepseek-ai" in service_args.big_model:
+        big_model_think_prefix = "<think>\n"
+        big_model_think_suffix = "\n</think>"
+    else:
+        return jsonify({"error": "Unknown big model format."}), 400
+
+    cot_accumulator = ""
+    usage_data = []
+    
+    if debug_prompts:
+        print("\n=== Starting Think-Summarize Process ===")
+        print(f"Number of rounds: {num_rounds}")
+        print(f"Tokens per thinking phase: {think_tokens}")
+        print("\nInitial prompt:")
+        print(base_prompt)
+
+    for round_idx in range(num_rounds):
+        if debug_prompts:
+            print(f"\n=== Round {round_idx + 1} ===")
+
+        # Thinking phase
+        think_prompt = base_prompt + cot_accumulator + big_model_think_prefix
+        if debug_prompts:
+            print("\nThinking prompt:")
+            print(think_prompt)
+
+        think_resp, think_latency = generate_text_vllm(
+            think_prompt,
+            port=service_args.big_model_port,
+            temperature=temperature,
+            max_tokens=think_tokens,
+            model=service_args.big_model
+        )
+        usage_dict = think_resp.get("usage", {})
+        usage_data.append({
+            "Model": service_args.big_model,
+            "Round": round_idx + 1,
+            "Phase": "think",
+            "PromptTokens": usage_dict.get("prompt_tokens", 0),
+            "CompletionTokens": usage_dict.get("completion_tokens", 0),
+            "Latency": think_latency
+        })
+
+        thoughts = think_resp["choices"][0]["text"]
+        if debug_prompts:
+            print("\nThoughts generated:")
+            print(thoughts)
+
+        # Summarization phase
+        summary_prompt = base_prompt + cot_accumulator + thoughts + "\n\nIn summary:"
+        if debug_prompts:
+            print("\nSummary prompt:")
+            print(summary_prompt)
+
+        summary_resp, summary_latency = generate_text_vllm(
+            summary_prompt,
+            port=service_args.big_model_port,
+            temperature=temperature,
+            max_tokens=max_tokens // 4,  # Use fewer tokens for summary
+            model=service_args.big_model
+        )
+        usage_dict = summary_resp.get("usage", {})
+        usage_data.append({
+            "Model": service_args.big_model,
+            "Round": round_idx + 1,
+            "Phase": "summarize",
+            "PromptTokens": usage_dict.get("prompt_tokens", 0),
+            "CompletionTokens": usage_dict.get("completion_tokens", 0),
+            "Latency": summary_latency
+        })
+
+        summary = summary_resp["choices"][0]["text"]
+        if debug_prompts:
+            print("\nSummary generated:")
+            print(summary)
+
+        # Update accumulator with just the summary
+        cot_accumulator += f"Round {round_idx + 1} summary: {summary}\n\n"
+
+    # Final answer phase
+    final_prompt = base_prompt + terminating_string + cot_accumulator
+    if debug_prompts:
+        print("\n=== Final Answer Phase ===")
+        print("Final prompt:")
+        print(final_prompt)
+
+    final_resp, final_latency = generate_text_vllm(
+        final_prompt,
+        port=service_args.big_model_port,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        model=service_args.big_model
+    )
+    usage_dict = final_resp.get("usage", {})
+    usage_data.append({
+        "Model": service_args.big_model,
+        "Round": "final",
+        "Phase": "answer",
+        "PromptTokens": usage_dict.get("prompt_tokens", 0),
+        "CompletionTokens": usage_dict.get("completion_tokens", 0),
+        "Latency": final_latency
+    })
+
+    final_reply = final_resp["choices"][0]["text"]
+    if debug_prompts:
+        print("\nFinal answer generated:")
+        print(final_reply)
+
+    response_payload = {
+        "final_answer": final_reply,
+        "usage_records": usage_data,
+        "summaries": cot_accumulator  # Include the accumulated summaries in response
+    }
+
+    if test_logging:
+        write_model_name = service_args.big_model.split("/")[-1]
+        with open(f"{draft_logs}/think_summarize_{write_model_name}.txt", "w") as f:
+            f.write("\n" + "-" * 80 + "\n" + "\n" + "Final Prompt" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(final_prompt)
+            f.write("\n" + "-" * 80 + "\n"+ "\n" + "Final Continuation" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(final_reply)
+            f.write("\n" + "-" * 80 + "\n"+ "\n" + "Accumulated Summaries" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(cot_accumulator)
+        print("[Service] Usage data:", usage_data)
+
+    return jsonify(response_payload), 200
 
 
 ##############################################################################
@@ -386,7 +560,7 @@ def parse_args():
     parser.add_argument("--big_model_port", type=int, default=8000)
     parser.add_argument("--big_model_gpus", type=str, default="0,1")
 
-    parser.add_argument("--small_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
+    parser.add_argument("--small_model", type=str, default="")
     parser.add_argument("--small_model_port", type=int, default=8001)
     parser.add_argument("--small_model_gpus", type=str, default="2")
     ### Sequential scaling of big/small/logprob modes
@@ -452,23 +626,27 @@ def main():
             sys.exit(1)
         print("[Service] Big model server is up.")
 
-    # 2) Check if small model is up. If not, we launch it
-    print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
-    if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
-        print("[Service] Small model is already up.")
+
+    if service_args.small_model == "":
+        print("[Service] No small model specified. Skipping small model launch.")
     else:
-        small_model_proc = launch_small_model(service_args.small_model,
-                                              service_args.small_model_port,
-                                              service_args.small_model_gpus)
-        print("[Service] Waiting for small model server to be ready ...")
-        if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
-            print("[Service] Small model server did not come up in time. Exiting.")
-            if small_model_proc is not None:
-                small_model_proc.terminate()
-            if big_model_proc is not None:
-                big_model_proc.terminate()
-            sys.exit(1)
-        print("[Service] Small model server is up.")
+        # 2) Check if small model is up. If not, we launch it
+        print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
+        if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
+            print("[Service] Small model is already up.")
+        else:
+            small_model_proc = launch_small_model(service_args.small_model,
+                                                service_args.small_model_port,
+                                                service_args.small_model_gpus)
+            print("[Service] Waiting for small model server to be ready ...")
+            if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
+                print("[Service] Small model server did not come up in time. Exiting.")
+                if small_model_proc is not None:
+                    small_model_proc.terminate()
+                if big_model_proc is not None:
+                    big_model_proc.terminate()
+                sys.exit(1)
+            print("[Service] Small model server is up.")
 
     # 3) Start our Flask app
     try:
