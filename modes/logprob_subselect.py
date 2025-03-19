@@ -151,7 +151,7 @@ def run_logprob_subselect_flow(
         # --- 6) If we are now at or below lbound, check majority for </think> ---
         if len(prompt_batch) <= lbound:
             n_with_think = sum(1 for cand in prompt_batch if model_think_suffix in cand)
-            if n_with_think > len(prompt_batch) / 2:
+            if n_with_think > int(2 * len(prompt_batch) / 3):
                 # If majority contain the closing tag, finalize
                 try:
                     final_scores, final_gen, final_avg_latency, num_req_logprobs = batched_eval_logprob_vllm(
@@ -179,14 +179,29 @@ def run_logprob_subselect_flow(
 
     # Possibly all have ended or we ran out of iterations. 
     # We'll do one final extension if we have leftover tokens:
-    final_answer = prompt_batch[0] + r"""\n So, finally the answer in the expected format would be: \bo"""
+    # final_answer = prompt_batch[0] + r"""\n So, finally the answer in the expected format would be: \bo"""
+    intermediate_answer = prompt_batch[0]
+
+    # Let small model finish upto 4096 tokens
+    small_model_final_resps, small_model_final_latency = batched_generate_text_vllm(
+        prompts=[intermediate_answer],
+        port=small_model_port,
+        temperature=temperature,
+        max_tokens=4096,
+        model=small_model,
+        requests=requests
+    )
+
+    final_prompt = intermediate_answer + small_model_final_resps[0]["choices"][0]["text"] + r"""\n Enough, now I should give the answer.</think> The final answer in \boxed latex format is:"""
+    # over here, dont use prompt_batch[0], use output of the model 
+    # final_answer = prompt_batch[0] + r"""\n So, finally the answer in the expected format would be: \bo"""
 
     # tokens_used = len(final_answer.split())
-    remaining_tokens = 512
+    remaining_tokens = 32
     # One last generation from the big model
     try:
         final_resps, final_latency = batched_generate_text_vllm(
-            prompts=[final_answer],
+            prompts=[final_prompt],
             port=big_model_port,
             temperature=temperature,
             max_tokens=remaining_tokens,
@@ -200,15 +215,14 @@ def run_logprob_subselect_flow(
         return prompt_batch[0], usage_data
                         
 
-    final_text = final_resps[0]["choices"][0]["text"]
-    final_answer += final_text
+    final_prompt += final_resps[0]["choices"][0]["text"]
 
-    print("final_text: ", final_text)
+    print("final_text: ", final_prompt)
     if test_logging:
         with open(f"{subfolder_path}/final_text.txt", "w") as f:
-            f.write(final_text)
+            f.write(final_prompt)
 
         with open(f"{subfolder_path}/full_trace.txt", "w") as f:
-            f.write(final_answer)
+            f.write(final_prompt)
 
-    return final_answer, usage_data
+    return final_prompt, usage_data

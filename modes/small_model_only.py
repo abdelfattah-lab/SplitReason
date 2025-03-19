@@ -10,6 +10,7 @@ def run_smallmodel_flow(
     small_model,
     small_model_port,
     generate_text_vllm,
+    terminating_string: str,
     max_tokens=1024,
     temperature=0.7,
     test_logging: bool = False,
@@ -20,6 +21,9 @@ def run_smallmodel_flow(
     *small_model* and return it as a final answer, plus usage data.
     """
     usage_data = []
+
+    model_think_prefix = "<think>\n"
+    model_think_suffix = "</think>"
 
     if test_logging:
         draft_logs = "small_model_draft_logs"
@@ -36,7 +40,8 @@ def run_smallmodel_flow(
         subfolder_path = f"{draft_logs}/{timestamp}"
         os.makedirs(subfolder_path, exist_ok=True)
 
-    for sequential_iter in range(sequential_scale):
+    # Scaling is 0 indexed, dont ask me why lol
+    for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
             # Basic prompt
             if "｜" not in question:
@@ -44,7 +49,8 @@ def run_smallmodel_flow(
             else:
                 prompt = f"{question}{terminating_string}\n{model_think_prefix}"
 
-        print("Sending request to big model")
+        if test_logging:
+            print("Sending request to small model")
         # Single big model request
         resp_json, latency = generate_text_vllm(
             prompt,
@@ -55,7 +61,6 @@ def run_smallmodel_flow(
         )
         usage_dict = resp_json.get("usage", {})
         final_reply = resp_json["choices"][0]["text"]
-
         usage_data.append({
             "Model": small_model,
             "ThinkIter": "placeholder",
@@ -67,9 +72,8 @@ def run_smallmodel_flow(
         })
 
         final_reply_small = resp_json["choices"][0]["text"]
-        if sequential_scale > 0 and sequential_iter < sequential_scale - 1:
+        if sequential_scale > 0 and sequential_iter < sequential_scale:
             # Add a '\nWait' to the final_reply_small and over-write prompt for the next iteration
-            prompt = f"{final_reply_small}\nWait"  
-        import pdb; pdb.set_trace()
+            prompt = f"{prompt}{final_reply_small}\nWait"  
 
     return final_reply_small, usage_data

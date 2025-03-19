@@ -10,6 +10,7 @@ def run_bigmodel_flow(
     big_model,
     big_model_port,
     generate_text_vllm,
+    terminating_string: str,
     max_tokens=1024,
     temperature=0.7,
     sequential_scale=0,
@@ -20,6 +21,9 @@ def run_bigmodel_flow(
     *big_model* and return it as a final answer, plus usage data.
     """
     usage_data = []
+
+    model_think_prefix = "<think>\n"
+    model_think_suffix = "</think>"
 
     if test_logging:
         draft_logs = "big_model_draft_logs"
@@ -36,14 +40,16 @@ def run_bigmodel_flow(
         subfolder_path = f"{draft_logs}/{timestamp}"
         os.makedirs(subfolder_path, exist_ok=True)
 
-    for sequential_iter in range(sequential_scale):
+    # Scaling is 0 indexed, dont ask me why lol
+    for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
             if "｜" not in question:
                 prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
             else:
                 prompt = f"{question}{terminating_string}\n{model_think_prefix}"
 
-        print("Sending request to big model")
+        if test_logging:
+            print("Sending request to big model")
         # Single big model request
         resp_json, latency = generate_text_vllm(
             prompt,
@@ -68,5 +74,5 @@ def run_bigmodel_flow(
         final_reply_big = resp_json["choices"][0]["text"]
         if sequential_scale > 0 and sequential_iter < sequential_scale - 1:
             # Add a '\nWait' to the final_reply_small and over-write prompt for the next iteration
-            prompt = f"{final_reply_big}\nWait"
+            prompt = f"{prompt}{final_reply_big}\nWait"
     return final_reply, usage_data

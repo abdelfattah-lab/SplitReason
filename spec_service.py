@@ -284,6 +284,7 @@ def speculative_reason():
             small_model=service_args.small_model,
             small_model_port=service_args.small_model_port,
             generate_text_vllm=generate_text_vllm,
+            terminating_string=terminating_string,
             max_tokens=max_tokens,
             test_logging=test_logging,
             temperature=temperature,
@@ -297,6 +298,7 @@ def speculative_reason():
             generate_text_vllm=generate_text_vllm,
             test_logging=test_logging,
             max_tokens=max_tokens,
+            terminating_string=terminating_string,
             temperature=temperature,
             sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
         )
