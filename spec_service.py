@@ -396,7 +396,7 @@ def parse_args():
     parser.add_argument("--small_first", action="store_true")
     ### End Of Spec Rewrite Args ###
     parser.add_argument("--max_tokens", type=int, default=16384)
-    parser.add_argument("--terminating_string", type=str, default="\nPut your final answer within \\boxed{}.")
+    parser.add_argument("--terminating_string", type=str, default=" \n Put your final answer within \\boxed{}.")
     parser.add_argument("--terminate_on_exit", action="store_true",
                         help="If True, will shut down vLLM servers on ctrl-c or exit.")
     parser.add_argument("--port", type=int, default=5000,

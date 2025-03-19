@@ -192,7 +192,7 @@ def run_logprob_subselect_flow(
         requests=requests
     )
 
-    final_prompt = intermediate_answer + small_model_final_resps[0]["choices"][0]["text"] + r"""\n Enough, now I should give the answer.</think> The final answer in \boxed latex format is:"""
+    final_prompt = intermediate_answer + small_model_final_resps[0]["choices"][0]["text"] + r""" \\n Enough, now I should give the answer.</think> The final answer in \boxed latex format is:"""
     # over here, dont use prompt_batch[0], use output of the model 
     # final_answer = prompt_batch[0] + r"""\n So, finally the answer in the expected format would be: \bo"""
 

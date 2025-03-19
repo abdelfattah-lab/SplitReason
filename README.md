@@ -50,4 +50,4 @@ Credit to [s1](https://github.com/simplescaling/s1/tree/main) for lm-evaluation-
 
 As an example, this will sequentially scale once, re-draft the CoT before the sequential scaling, re-write the full CoT everytime. Also it will encourage the small model to propose potential reasoning errors for continuity. 
 
-`python test_spec.py --test_logging --thinking_n_ignore 1 --drafting_n 1 --full_rewrite --draft_propose_ignore_str`
+`python test_spec.py --test_logging --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --logprob_subselect --sgen 512 --stok 16 --sdecay 2 --ltok 32`
