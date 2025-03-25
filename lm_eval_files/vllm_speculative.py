@@ -137,6 +137,7 @@ class SpeculativeVLLM(TemplateLM):
         self.placeholder_mode = self.service_params.get("placeholder_mode", False)
         self.spec_rewrite = self.service_params.get("spec_rewrite", False)
         self.logprob_subselect = self.service_params.get("logprob_subselect", False)
+        self.random_switch = self.service_params.get("random_switch", False)
         self.big_model_only = self.service_params.get("big_model_only", False)
         self.small_model_only = self.service_params.get("small_model_only", False)
 
@@ -147,6 +148,9 @@ class SpeculativeVLLM(TemplateLM):
         self.ltok = self.service_params.get("ltok", 16)
         self.lbound = self.service_params.get("lbound", 4)
         self.max_iterations = self.service_params.get("max_iterations", 10)
+        self.switch_ratio = self.service_params.get("switch_ratio", 1)
+        self.switch_chunk = self.service_params.get("switch_chunk", 16)
+        self.sequential_scale = self.service_params.get("sequential_scale", 0)
 
 
         self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
@@ -227,7 +231,7 @@ class SpeculativeVLLM(TemplateLM):
         max_tokens = self.service_params.get("max_tokens", 16384)
         terminating_string = self.service_params.get(
             "terminating_string",
-            r"\nPut your final answer within \boxed{}."
+            r"\\n Put your final answer within \boxed{}."
         )
 
         cmd = [
@@ -249,9 +253,14 @@ class SpeculativeVLLM(TemplateLM):
             f"--ltok={self.ltok}",
             f"--lbound={self.lbound}",
             f"--max_iterations={self.max_iterations}",
+            f"--switch_ratio={self.switch_ratio}",
+            f"--switch_chunk={self.switch_chunk}",
             "--port", str(self.service_port),
+            "--sequential_scale", str(self.sequential_scale),
         ]
 
+        if self.random_switch:
+            cmd.append("--random_switch")
         if self.service_params.get("small_first", False):
             cmd.append("--small_first")
         if self.service_params.get("spec_rewrite", False):
@@ -389,9 +398,9 @@ class SpeculativeVLLM(TemplateLM):
                     "question": prompt_text,
                     "max_tokens": max_tokens if max_tokens else self._max_gen_toks,
                 }
-                if stop:
-                    # If you only have one stop token, we do e.g. stop[-1]
-                    payload["terminating_string"] = stop[-1]
+                # if stop:
+                #     # If you only have one stop token, we do e.g. stop[-1]
+                #     payload["terminating_string"] = stop[-1]
 
                 payload.update(self.service_params)
                 payload.update(kwargs)

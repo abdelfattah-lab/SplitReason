@@ -117,7 +117,6 @@ def run_random_switch_flow(
             print(f"ERROR while generating from {chosen_model}: {e}")
             print("Traceback:", traceback.format_exc())
             # Return early with what we have so far
-            import pdb; pdb.set_trace()
             return current_text, usage_data
 
         partial_resp = generation_resps[0]["choices"][0]
@@ -142,12 +141,10 @@ def run_random_switch_flow(
         # We check if the model indicated an end of sentence or any finishing
         # condition. You can define your own condition more precisely:
         if finish_reason == "stop":
-            import pdb; pdb.set_trace()
             break
 
         # Also break if we've reached the token limit
         if tokens_generated >= max_tokens:
-            import pdb; pdb.set_trace()
             break
 
     final_prompt = current_text

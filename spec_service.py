@@ -70,7 +70,7 @@ def launch_small_model(model_name, port, gpu_ids):
         "--uvicorn-log-level=warning",
         # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
-        # "--enable-chunked-prefill"
+        "--enable-chunked-prefill"
     ]
     print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
     return subprocess.Popen(cmd, env=env)

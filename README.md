@@ -104,6 +104,24 @@ Example (Random switching baseline):
         "switch_chunk": args.switch_chunk,
 ```
 
+- Add the args to `lm_eval_files/vllm_speculative.py` in `__init__`
+```
+        self.random_switch = self.service_params.get("random_switch", False)
+        self.switch_ratio = self.service_params.get("switch_ratio", 1)
+        self.switch_chunk = self.service_params.get("switch_chunk", 16)
+```
+
+- Use the above initialized values in `lm_eval_files/vllm_speculative.py` initializer in `_ensure_correct_service_is_running`
+```
+
+            f"--switch_ratio={self.switch_ratio}",
+            f"--switch_chunk={self.switch_chunk}",
+```
+
+```
+        if self.random_switch:
+            cmd.append("--random_switch")
+```
 
 - Add assertion in test_spec.py
     - `if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch]) != 1:`
