@@ -42,6 +42,77 @@ cd ./../
 
 Credit to [s1](https://github.com/simplescaling/s1/tree/main) for lm-evaluation-harness modifications.
 
+# Adding new modes
+
+- Add args to spec_service.py and test_spec.py
+
+Example (Random switching baseline):
+
+```
+    parser.add_argument("--random_switch", action="store_true")
+    parser.add_argument("--switch_ratio", type=int, default=1, help="Switching ratio, always 1:{switch_ratio}")
+    parser.add_argument("--switch_chunk", type=int, default=16)
+```
+
+- Parse args from data
+
+```
+    switch_ratio = data.get("switch_ratio", service_args.switch_ratio)
+    switch_chunk = data.get("switch_chunk", service_args.switch_chunk)
+```
+
+- Add condition on speculative_reason function. Note that requests, batched_generate_text_vllmm batched_eval_logprob_vllm should be passed appropriately, as they are used. (Just pattern-match with `logprob_subselect_flow`)
+
+```
+    elif data.get("random_switch", False):
+        final_reply, usage_data = run_random_switch_flow(
+            # Mode related args here
+                switch_ratio=switch_ratio,
+                switch_chunk=switch_chunk,
+            # Pretty much mandatory args below
+                question=question,
+                test_logging=test_logging,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                terminating_string=terminating_string,
+                big_model_port=service_args.big_model_port,
+                big_model=service_args.big_model,
+                small_model_port=service_args.small_model_port,
+                small_model=service_args.small_model,
+                batched_generate_text_vllm=batched_generate_text_vllm,
+                batched_eval_logprob_vllm=batched_eval_logprob_vllm,
+                requests=requests
+        )
+```
+
+- Add new args to `cmd = []` in test_spec.py as well as payload
+```
+            f"--switch_ratio={args.switch_ratio}",
+            f"--switch_chunk={args.switch_chunk}",
+```
+
+```
+    # Handle optional args as before
+    if args.random_switch:
+        cmd.append("--random_switch")
+```
+
+```
+# In payload in main()
+        "random_switch": args.random_switch,
+        "switch_ratio": args.switch_ratio,
+        "switch_chunk": args.switch_chunk,
+```
+
+
+- Add assertion in test_spec.py
+    - `if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch]) != 1:`
+
+- Create `random_switch_flow.py` in modes, code the `run_random_switch_flow` function, add import to `spec_service.py` 
+    - `from modes.random_switch_flow import run_random_switch_flow`
+
+
+
 # Evaluate
 
 `bash eval_script.sh`

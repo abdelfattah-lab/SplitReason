@@ -15,6 +15,7 @@ from modes.placeholder import run_placeholder_flow
 from modes.logprob_subselect import run_logprob_subselect_flow
 from modes.small_model_only import run_smallmodel_flow
 from modes.big_model_only import run_bigmodel_flow
+from modes.random_switch_flow import run_random_switch_flow
 
 app = Flask(__name__)
 
@@ -265,6 +266,8 @@ def speculative_reason():
     draft_propose_ignore_str = data.get("draft_propose_ignore_str", service_args.draft_propose_ignore_str)
     small_first = data.get("small_first", service_args.small_first)
     bloat_tokens = data.get("bloat_tokens", service_args.bloat_tokens)
+    switch_ratio = data.get("switch_ratio", service_args.switch_ratio)
+    switch_chunk = data.get("switch_chunk", service_args.switch_chunk)
 
     if data.get("placeholder_mode", False):
         final_reply, usage_data = run_placeholder_flow(
@@ -345,6 +348,23 @@ def speculative_reason():
             extract_cot=extract_cot,
             service_args=service_args
         )
+    elif data.get("random_switch", False):
+        final_reply, usage_data = run_random_switch_flow(
+            question=question,
+            test_logging=test_logging,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            terminating_string=terminating_string,
+            big_model_port=service_args.big_model_port,
+            big_model=service_args.big_model,
+            small_model_port=service_args.small_model_port,
+            small_model=service_args.small_model,
+            batched_generate_text_vllm=batched_generate_text_vllm,
+            batched_eval_logprob_vllm=batched_eval_logprob_vllm,
+            switch_ratio=switch_ratio,
+            switch_chunk=switch_chunk,
+            requests=requests
+        )
     else:
         return jsonify({"error": "Invalid mode specified in JSON payload"}), 400
 
@@ -374,6 +394,7 @@ def parse_args():
     ### Modes, only 1 can be true ###
     parser.add_argument("--placeholder_mode", action="store_true")
     parser.add_argument("--spec_rewrite", action="store_true")
+    parser.add_argument("--random_switch", action="store_true")
     parser.add_argument("--logprob_subselect", action="store_true")
     parser.add_argument("--big_model_only", action="store_true")
     parser.add_argument("--small_model_only", action="store_true")
@@ -387,6 +408,10 @@ def parse_args():
     parser.add_argument("--lbound", type=int, default=4)
     parser.add_argument("--max_iterations", type=int, default=None, help="Maximum number of iterations, closesly controls max token budget.")
     ### End Of LogProb Subselect Args ###
+    ### Random Switch Args ###
+    parser.add_argument("--switch_ratio", type=int, default=1, help="Switching ratio, always 1:{switch_ratio}")
+    parser.add_argument("--switch_chunk", type=int, default=16)
+    ### End Of Random Switch Args ###
     ### Spec Rewrite Args ###
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")

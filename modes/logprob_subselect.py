@@ -85,6 +85,7 @@ def run_logprob_subselect_flow(
             print(f"ERROR: {e}")
             print(f"Traceback: {traceback.format_exc()}")
             print("\n\n RETURNING EARLY OUTPUT \n\n")
+            import pdb; pdb.set_trace()
             return prompt_batch[0], usage_data
 
         # --- 2) Build the new candidates by appending each partial response to the corresponding prompt ---
@@ -104,13 +105,14 @@ def run_logprob_subselect_flow(
                 big_model=big_model,
                 requests=requests,
                 temperature=0.0,
-                max_tokens=ltok,  # the big model is allowed to generate these tokens
+                max_tokens=ltok,
                 logprobs=1
             )
         except Exception as e:
             print(f"ERROR: {e}")
             print(f"Traceback: {traceback.format_exc()}")
             print("\n\n RETURNING EARLY OUTPUT \n\n")
+            import pdb; pdb.set_trace()
             return prompt_batch[0], usage_data
 
         # For logging:
@@ -145,7 +147,7 @@ def run_logprob_subselect_flow(
         # --- 5) Sort by score, keep top N, per sdecay ---
         n_keep = max(1, len(scores) // sdecay)
         scored_candidates = list(zip(combined_candidates, scores))
-        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+        scored_candidates.sort(key=lambda x: x[1], reverse=False)
         prompt_batch = [x[0] for x in scored_candidates[:n_keep]]
 
         # --- 6) If we are now at or below lbound, check majority for </think> ---
@@ -167,6 +169,7 @@ def run_logprob_subselect_flow(
                     print(f"ERROR: {e}")
                     print(f"Traceback: {traceback.format_exc()}")
                     print("\n\n RETURNING EARLY OUTPUT \n\n")
+                    import pdb; pdb.set_trace()
                     return prompt_batch[0], usage_data
                 final_scored = list(zip(prompt_batch, final_scores, final_gen))
                 final_scored.sort(key=lambda x: x[1], reverse=True)
@@ -192,18 +195,19 @@ def run_logprob_subselect_flow(
         requests=requests
     )
 
-    final_prompt = intermediate_answer + small_model_final_resps[0]["choices"][0]["text"] + r""" \\n Enough, now I should give the answer.</think> The final answer in \boxed latex format is:"""
+    final_prompt = intermediate_answer + small_model_final_resps[0]["choices"][0]["text"] + r""" \\n Enough, now I should give the answer. The box should only contain the final NUMBER asked for! \\n The final numerical answer in boxed latex format is: \boxed{"""
     # over here, dont use prompt_batch[0], use output of the model 
     # final_answer = prompt_batch[0] + r"""\n So, finally the answer in the expected format would be: \bo"""
 
     # tokens_used = len(final_answer.split())
-    remaining_tokens = 32
+    remaining_tokens = 8
     # One last generation from the big model
     try:
         final_resps, final_latency = batched_generate_text_vllm(
             prompts=[final_prompt],
             port=big_model_port,
-            temperature=temperature,
+            # temperature=temperature,
+            temperature=0.0,
             max_tokens=remaining_tokens,
             model=big_model,
             requests=requests

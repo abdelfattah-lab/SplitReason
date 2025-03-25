@@ -91,6 +91,7 @@ def main():
     ### Modes, only 1 can be true ###
     parser.add_argument("--placeholder_mode", action="store_true")
     parser.add_argument("--spec_rewrite", action="store_true")
+    parser.add_argument("--random_switch", action="store_true")
     parser.add_argument("--logprob_subselect", action="store_true")
     parser.add_argument("--big_model_only", action="store_true")
     parser.add_argument("--small_model_only", action="store_true")
@@ -103,6 +104,10 @@ def main():
     parser.add_argument("--lbound", type=int, default=4)
     parser.add_argument("--max_iterations", type=int, default=None, help="Maximum number of iterations, closesly controls max token budget.")
     ### End Of LogProb Subselect Args ###
+    ### Random Switch Args ###
+    parser.add_argument("--switch_ratio", type=int, default=1, help="Switching ratio, always 1:{switch_ratio}")
+    parser.add_argument("--switch_chunk", type=int, default=16)
+    ### End Of Random Switch Args ###
     ### Spec Rewrite Args ###
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
@@ -124,8 +129,8 @@ def main():
     if args.max_iterations is None:
         args.max_iterations = 32768 // (args.stok * args.ltok)
     
-    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only]) != 1:
-        print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, logprob_subselect, big_model_only, small_model_only should be True.")
+    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch]) != 1:
+        print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
         sys.exit(1)
 
     kill_cmd = "fuser -k -9 /dev/nvidia*"
@@ -167,10 +172,14 @@ def main():
             f"--ltok={args.ltok}",
             f"--lbound={args.lbound}",
             f"--max_iterations={args.max_iterations}",
+            f"--switch_ratio={args.switch_ratio}",
+            f"--switch_chunk={args.switch_chunk}",
             "--port", str(args.service_port),
             "--sequential_scale", str(args.sequential_scale)
         ]
     # Handle optional args as before
+    if args.random_switch:
+        cmd.append("--random_switch")
     if args.small_first:
         cmd.append("--small_first")
     if args.placeholder_mode:
@@ -207,12 +216,15 @@ def main():
         "thinking_n_ignore": args.thinking_n_ignore,
         "drafting_n": args.drafting_n,
         "full_rewrite": args.full_rewrite,
+        "random_switch": args.random_switch,
         "small_first": args.small_first,
         "placeholder_mode": args.placeholder_mode,
         "logprob_subselect": args.logprob_subselect,
         "spec_rewrite": args.spec_rewrite,
         "big_model_only": args.big_model_only,
         "small_model_only": args.small_model_only,
+        "switch_ratio": args.switch_ratio,
+        "switch_chunk": args.switch_chunk,
         "sgen": args.sgen,
         "stok": args.stok,
         "sdecay": args.sdecay,
