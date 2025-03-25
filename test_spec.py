@@ -80,10 +80,10 @@ def main():
                         help="Host where spec_service is running.")
     parser.add_argument("--service_port", type=int, default=5000,
                         help="Port for the spec_service Flask app.")
-    parser.add_argument("--big_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
+    parser.add_argument("--big_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
     parser.add_argument("--big_model_port", type=int, default=8000)
     parser.add_argument("--big_model_gpus", type=str, default="1,2")
-    parser.add_argument("--small_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
+    parser.add_argument("--small_model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
     parser.add_argument("--small_model_port", type=int, default=8001)
     parser.add_argument("--small_model_gpus", type=str, default="0")
     ### Sequential scaling of big/small/logprob modes

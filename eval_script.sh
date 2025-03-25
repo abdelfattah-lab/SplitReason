@@ -2,10 +2,16 @@
 
 export $(grep -v '^#' .env | xargs)
 
-export VLLM_WORKER_MULTIPROC_METHOD='spawn'
+export VLLM_WORKER_MULTIPROC_METHOD='fork'
 export PROCESSOR=gpt-4o-mini
 export VLLM_CONFIGURE_LOGGING=1
 export VLLM_LOGGING_CONFIG_PATH=logging_config.json
+export PYTHONPATH="${PYTHONPATH}:${PWD}"
+export ZMQ_BIND_ADDRESS='127.0.0.1'
+export CUDA_LAUNCH_BLOCKING=1
+export OPENAI_API_KEY=sk-f1NsPRPJmnjiOWU_A8--7Q48QK4q4nETb0mAYTr51iT3BlbkFJph5v94eagNhCriCnJw-FDtdQTJNIxsBYQUbMHp_IsA
+
+
 ##### RUN THIS BEFORE STARTING NEW JOBS #####
 # fuser -k -9 /dev/nvidia*
 ##### RUN THIS BEFORE STARTING NEW JOBS #####
@@ -143,6 +149,29 @@ python -m lm_eval --model vllm_speculative --model_args "service_script_path=./s
 # python -m lm_eval --model vllm_speculative \
 #   --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=1|2,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=0,max_tokens=16384,stok=512,sgen=32,sdecay=2,ltok=64,lbound=8,logprob_subselect=True" \
 #   --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/lprob_32b_15b_512_16_2_64_2 --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
+# Thinking only
+# Pretrained argument is needed to apply the chat template successfully to the question.
+# max_gen_toks is needed to actually have questions in the prompts for some reason.
+python -m lm_eval --model vllm_thinkonly \
+  --model_args "pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,big_model_port=8000,big_model_gpus=0,max_tokens=16384,think_tokens=256,num_rounds=3,debug_prompts=true" \
+  --tasks aime24_nofigures --batch_size auto --apply_chat_template --output_path log_traces/think_summarize --log_samples --gen_kwargs "max_gen_toks=16384" --limit 1
+
+
+# Summarization
+python -m lm_eval --model vllm_summarize \
+  --model_args "pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,big_model_port=8000,big_model_gpus=0,max_tokens=16384,think_tokens=256,summary_tokens=256,num_rounds=3,debug_prompts=true" \
+  --tasks aime24_nofigures --batch_size auto --apply_chat_template --output_path log_traces/think_summarize --log_samples --gen_kwargs "max_gen_toks=16384" --limit 1
+
+
+# Test the new think-summarize model with the 32B model
+time python -m lm_eval --model vllm_summarize \
+  --model_args "pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=1|2,max_tokens=16384,think_tokens=200,num_rounds=3,debug_prompts=true" \
+  --tasks aime24_nofigures --batch_size auto --apply_chat_template --output_path log_traces/think_summarize --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
+
+# # Logprob subselect on 1.5B Qwen model with 14B guide
+# time python -m lm_eval --model vllm_speculative \
+#   --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=1|2,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=0,max_tokens=16384,stok=512,sgen=16,sdecay=2,ltok=32,lbound=2,logprob_subselect=True" \
+#   --tasks aime24_nofigures --batch_size auto --apply_chat_template --output_path log_traces/logprob_subset --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
   
 
 # # # LogProb Subselect Qwen1.5 256_16_2_64_2

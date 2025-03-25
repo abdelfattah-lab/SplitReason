@@ -6,6 +6,7 @@ import signal
 import sys
 import requests
 import threading
+import random
 
 from flask import Flask, request, jsonify
 from typing import List, Tuple, Dict, Any, Optional, Union
@@ -25,9 +26,16 @@ service_args = None   # Will hold the parsed arguments
 
 def wait_for_server(url, timeout=600.0):
     start_time = time.time()
+    # Extract the base URL to determine which endpoint to use
+    base_url = "/".join(url.split("/")[:-1])
+    endpoint = url.split("/")[-1]
+    
+    # Use /health for vLLM servers, but keep /ping for our own service
+    check_url = f"{base_url}/health" if endpoint == "ping" and "localhost" in url else url
+    
     while time.time() - start_time < timeout:
         try:
-            r = requests.get(url)
+            r = requests.get(check_url)
             if r.status_code == 200:
                 return True
         except Exception:
@@ -48,9 +56,10 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
         "--uvicorn-log-level=warning",
-        # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
-        "--enable-chunked-prefill"
+        "--enable-chunked-prefill",
+        "--host", "127.0.0.1",
+        "--disable-log-requests",
     ]
     print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
     return subprocess.Popen(cmd, env=env)
@@ -199,9 +208,10 @@ def batched_eval_logprob_vllm(
 
     return scores, gentexts, avg_latency, num_requests
     
-def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model"):
+def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", stop=None):
     """
     A direct call to the vLLM HTTP server's /v1/completions endpoint.
+    Added support for stop sequences.
     """
     url = f"http://localhost:{port}/v1/completions"
     payload = {
@@ -210,6 +220,10 @@ def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model
         "max_tokens": max_tokens,
         "temperature": temperature
     }
+    # Add stop sequence if provided
+    if stop:
+        payload["stop"] = stop
+        
     start_time = time.time()
     resp = requests.post(url, json=payload)
     end_time = time.time()
@@ -269,6 +283,14 @@ def speculative_reason():
     switch_ratio = data.get("switch_ratio", service_args.switch_ratio)
     switch_chunk = data.get("switch_chunk", service_args.switch_chunk)
 
+    # Think Only and Think Summarize specific parameters
+    think_tokens = data.get("think_tokens", service_args.think_tokens)
+    summary_tokens = data.get("summary_tokens", service_args.summary_tokens)
+    num_rounds = data.get("num_rounds", service_args.num_rounds)
+    end_thinking = data.get("end_thinking", service_args.end_thinking)
+    stop_token = data.get("stop_token", service_args.stop_token)
+    debug_prompts = data.get("debug_prompts", service_args.debug_prompts)
+
     if data.get("placeholder_mode", False):
         final_reply, usage_data = run_placeholder_flow(
             question=question,
@@ -327,6 +349,37 @@ def speculative_reason():
             max_iterations=data.get("max_iterations", service_args.max_iterations),
             sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
         )
+    elif data.get("think_only", False):
+        final_reply, usage_data = run_think_only_flow(
+            question=question,
+            think_tokens=think_tokens,
+            num_rounds=num_rounds,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            end_thinking=end_thinking,
+            debug_prompts=debug_prompts,
+            stop_token=stop_token,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            generate_text_vllm=generate_text_vllm,
+            test_logging=test_logging
+        )
+    elif data.get("think_summarize", False):
+        final_reply, usage_data = run_think_summarize_flow(
+            question=question,
+            think_tokens=think_tokens,
+            summary_tokens=summary_tokens,
+            num_rounds=num_rounds,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            end_thinking=end_thinking,
+            debug_prompts=debug_prompts,
+            stop_token=stop_token,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            generate_text_vllm=generate_text_vllm,
+            test_logging=test_logging
+        )
     elif data.get("spec_rewrite", False):
         final_reply, usage_data = run_speculative_reason_flow(
             question=question,
@@ -374,59 +427,168 @@ def speculative_reason():
     }
     return jsonify(response_payload), 200
 
-@app.route("/think_summarize", methods=["POST"])
-def think_summarize():
-    """
-    This endpoint implements a different reasoning approach where the model:
-    1. Thinks for a while (generates some tokens)
-    2. Summarizes its thoughts
-    3. Uses these summaries for the next round of thinking
-    4. Repeats this process multiple times
-    5. Generates a final answer based on the accumulated summaries
-
-    Sample JSON POST to /think_summarize:
-        {
-          "question": "What is 2+2?",
-          "think_tokens": 200,
-          "num_rounds": 3,
-          "max_tokens": 1024,
-          "temperature": 0.7,
-          "debug_prompts": true,
-          "terminating_string": "\\nFinal Answer"
-        }
-    """
-    data = request.json
-    if not data or "question" not in data:
-        return jsonify({"error": "Missing 'question' in JSON payload"}), 400
-
-    question = data["question"]
-    test_logging = data.get("test_logging", False)
+def run_think_only_flow(
+    question: str,
+    think_tokens: int,
+    num_rounds: int,
+    temperature: float,
+    max_tokens: int,
+    end_thinking: str,
+    debug_prompts: bool,
+    stop_token: str,
+    big_model: str,
+    big_model_port: int,
+    generate_text_vllm,
+    test_logging: bool = False
+):
+    """Helper function implementing the think-only reasoning flow."""
     if test_logging:
         draft_logs = "draft_logs"
         if not os.path.exists(draft_logs):
             os.makedirs(draft_logs)
         print(f"[Service] test_logging=True; extra debug for question: {question}")
 
-    # Get parameters with defaults
-    think_tokens = data.get("think_tokens", 200)
-    num_rounds = data.get("num_rounds", 3)
-    temperature = data.get("temperature", 0.6)
-    max_tokens = data.get("max_tokens", service_args.max_tokens)
-    terminating_string = data.get("terminating_string", service_args.terminating_string)
-    debug_prompts = data.get("debug_prompts", False)
-
     # Basic prompt for user query
-    base_prompt = f"<|user|>\n{question}\n<|assistant|>\n"
+    base_prompt = question
 
     # Big model format for thinking
-    if "simplescaling" in service_args.big_model:
+    if "simplescaling" in big_model:
         big_model_think_prefix = "<|im_start|>think\n"
         big_model_think_suffix = "<|im_start|>answer"
-    elif "deepseek-ai" in service_args.big_model:
+    elif "deepseek-ai" in big_model:
         big_model_think_prefix = "<think>\n"
         big_model_think_suffix = "\n</think>"
     else:
-        return jsonify({"error": "Unknown big model format."}), 400
+        raise ValueError("Unknown big model format.")
+
+    thoughts_accumulator = ""
+    usage_data = []
+    
+    if debug_prompts:
+        print("\n=== Starting Think-Only Process ===")
+        print(f"Number of rounds: {num_rounds}")
+        print(f"Tokens per thinking phase: {think_tokens}")
+        print(f"Stop token: {stop_token}")
+        print("\nInitial prompt:")
+        print(base_prompt)
+
+    for round_idx in range(num_rounds):
+        if debug_prompts:
+            print(f"\n=== Round {round_idx + 1} ===")
+
+        # Append "Wait" after each round except before the first one
+        if len(thoughts_accumulator) > 0:
+            thoughts_accumulator += "\nWait"
+
+        think_prompt = base_prompt + thoughts_accumulator
+        if debug_prompts:
+            print("\nThinking prompt:")
+            print(think_prompt)
+
+        # Use stop token to pause generation
+        think_resp, think_latency = generate_text_vllm(
+            think_prompt,
+            port=big_model_port,
+            temperature=temperature,
+            max_tokens=think_tokens,
+            model=big_model,
+            stop=stop_token
+        )
+        usage_dict = think_resp.get("usage", {})
+        usage_data.append({
+            "Model": big_model,
+            "Round": round_idx + 1,
+            "Phase": "think",
+            "PromptTokens": usage_dict.get("prompt_tokens", 0),
+            "CompletionTokens": usage_dict.get("completion_tokens", 0),
+            "Latency": think_latency
+        })
+
+        new_thoughts = think_resp["choices"][0]["text"]
+        if debug_prompts:
+            print("\nThoughts generated (stopped at stop token):")
+            print(new_thoughts)
+            print(f"Length of thoughts: {len(new_thoughts)}")
+            
+        # Accumulate thoughts
+        thoughts_accumulator += new_thoughts
+
+    # Final answer phase - no stop token here as we want the full completion
+    final_prompt = base_prompt + thoughts_accumulator + end_thinking
+    if debug_prompts:
+        print("\n=== Final Answer Phase ===")
+        print("Final prompt:")
+        print(final_prompt)
+
+    final_resp, final_latency = generate_text_vllm(
+        final_prompt,
+        port=big_model_port,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        model=big_model
+    )
+    usage_dict = final_resp.get("usage", {})
+    usage_data.append({
+        "Model": big_model,
+        "Round": "final",
+        "Phase": "answer",
+        "PromptTokens": usage_dict.get("prompt_tokens", 0),
+        "CompletionTokens": usage_dict.get("completion_tokens", 0),
+        "Latency": final_latency
+    })
+
+    final_reply = final_resp["choices"][0]["text"]
+    if debug_prompts:
+        print("\nFinal answer generated:")
+        print(final_reply)
+
+    if test_logging:
+        write_model_name = big_model.split("/")[-1]
+        with open(f"{draft_logs}/think_only_{write_model_name}.txt", "w") as f:
+            f.write("\n" + "-" * 80 + "\n" + "\n" + "Final Prompt" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(final_prompt)
+            f.write("\n" + "-" * 80 + "\n"+ "\n" + "Final Continuation" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(final_reply)
+            f.write("\n" + "-" * 80 + "\n"+ "\n" + "Accumulated Thoughts" + "\n" + "\n" + "-" * 80 + "\n")
+            f.write(thoughts_accumulator)
+        print("[Service] Usage data:", usage_data)
+
+    return final_reply, usage_data
+
+def run_think_summarize_flow(
+    question: str,
+    think_tokens: int,
+    summary_tokens: int,
+    num_rounds: int,
+    temperature: float,
+    max_tokens: int,
+    end_thinking: str,
+    debug_prompts: bool,
+    stop_token: str,
+    big_model: str,
+    big_model_port: int,
+    generate_text_vllm,
+    test_logging: bool = False
+):
+    """Helper function implementing the think-summarize reasoning flow."""
+    if test_logging:
+        draft_logs = "draft_logs"
+        if not os.path.exists(draft_logs):
+            os.makedirs(draft_logs)
+        print(f"[Service] test_logging=True; extra debug for question: {question}")
+
+    # Basic prompt for user query
+    base_prompt = question
+
+    # Big model format for thinking
+    if "simplescaling" in big_model:
+        big_model_think_prefix = "<|im_start|>think\n"
+        big_model_think_suffix = "<|im_start|>answer"
+    elif "deepseek-ai" in big_model:
+        big_model_think_prefix = "<think>\n"
+        big_model_think_suffix = "\n</think>"
+    else:
+        raise ValueError("Unknown big model format.")
 
     cot_accumulator = ""
     usage_data = []
@@ -435,6 +597,7 @@ def think_summarize():
         print("\n=== Starting Think-Summarize Process ===")
         print(f"Number of rounds: {num_rounds}")
         print(f"Tokens per thinking phase: {think_tokens}")
+        print(f"Stop token: {stop_token}")
         print("\nInitial prompt:")
         print(base_prompt)
 
@@ -443,21 +606,26 @@ def think_summarize():
             print(f"\n=== Round {round_idx + 1} ===")
 
         # Thinking phase
-        think_prompt = base_prompt + cot_accumulator + big_model_think_prefix
+        if len(cot_accumulator) > 0:
+            cot_accumulator += "Wait"
+
+        think_prompt = base_prompt + cot_accumulator
         if debug_prompts:
             print("\nThinking prompt:")
             print(think_prompt)
 
+        # Use stop token to pause generation
         think_resp, think_latency = generate_text_vllm(
             think_prompt,
-            port=service_args.big_model_port,
+            port=big_model_port,
             temperature=temperature,
             max_tokens=think_tokens,
-            model=service_args.big_model
+            model=big_model,
+            stop=stop_token
         )
         usage_dict = think_resp.get("usage", {})
         usage_data.append({
-            "Model": service_args.big_model,
+            "Model": big_model,
             "Round": round_idx + 1,
             "Phase": "think",
             "PromptTokens": usage_dict.get("prompt_tokens", 0),
@@ -467,25 +635,27 @@ def think_summarize():
 
         thoughts = think_resp["choices"][0]["text"]
         if debug_prompts:
-            print("\nThoughts generated:")
+            print("\nThoughts generated (stopped at stop token):")
             print(thoughts)
+            print(f"Length of thoughts: {len(thoughts)}")
 
         # Summarization phase
-        summary_prompt = base_prompt + cot_accumulator + thoughts + "\n\nIn summary:"
+        summary_prompt = base_prompt + big_model_think_prefix + cot_accumulator + thoughts + "\n\nSummary of key steps:"
         if debug_prompts:
             print("\nSummary prompt:")
             print(summary_prompt)
 
         summary_resp, summary_latency = generate_text_vllm(
             summary_prompt,
-            port=service_args.big_model_port,
+            port=big_model_port,
             temperature=temperature,
-            max_tokens=max_tokens // 4,  # Use fewer tokens for summary
-            model=service_args.big_model
+            max_tokens=summary_tokens,
+            model=big_model,
+            stop=stop_token
         )
         usage_dict = summary_resp.get("usage", {})
         usage_data.append({
-            "Model": service_args.big_model,
+            "Model": big_model,
             "Round": round_idx + 1,
             "Phase": "summarize",
             "PromptTokens": usage_dict.get("prompt_tokens", 0),
@@ -499,10 +669,10 @@ def think_summarize():
             print(summary)
 
         # Update accumulator with just the summary
-        cot_accumulator += f"Round {round_idx + 1} summary: {summary}\n\n"
+        cot_accumulator = f"{summary}\n\n"
 
-    # Final answer phase
-    final_prompt = base_prompt + terminating_string + cot_accumulator
+    # Final answer phase - no stop token here as we want the full completion
+    final_prompt = base_prompt + cot_accumulator + end_thinking
     if debug_prompts:
         print("\n=== Final Answer Phase ===")
         print("Final prompt:")
@@ -510,14 +680,14 @@ def think_summarize():
 
     final_resp, final_latency = generate_text_vllm(
         final_prompt,
-        port=service_args.big_model_port,
+        port=big_model_port,
         temperature=temperature,
         max_tokens=max_tokens,
-        model=service_args.big_model
+        model=big_model
     )
     usage_dict = final_resp.get("usage", {})
     usage_data.append({
-        "Model": service_args.big_model,
+        "Model": big_model,
         "Round": "final",
         "Phase": "answer",
         "PromptTokens": usage_dict.get("prompt_tokens", 0),
@@ -530,14 +700,8 @@ def think_summarize():
         print("\nFinal answer generated:")
         print(final_reply)
 
-    response_payload = {
-        "final_answer": final_reply,
-        "usage_records": usage_data,
-        "summaries": cot_accumulator  # Include the accumulated summaries in response
-    }
-
     if test_logging:
-        write_model_name = service_args.big_model.split("/")[-1]
+        write_model_name = big_model.split("/")[-1]
         with open(f"{draft_logs}/think_summarize_{write_model_name}.txt", "w") as f:
             f.write("\n" + "-" * 80 + "\n" + "\n" + "Final Prompt" + "\n" + "\n" + "-" * 80 + "\n")
             f.write(final_prompt)
@@ -547,8 +711,7 @@ def think_summarize():
             f.write(cot_accumulator)
         print("[Service] Usage data:", usage_data)
 
-    return jsonify(response_payload), 200
-
+    return final_reply, usage_data
 
 ##############################################################################
 # Main entrypoint: parse arguments, possibly start big/small model servers
@@ -572,8 +735,18 @@ def parse_args():
     parser.add_argument("--logprob_subselect", action="store_true")
     parser.add_argument("--big_model_only", action="store_true")
     parser.add_argument("--small_model_only", action="store_true")
+    parser.add_argument("--think_only", action="store_true")
+    parser.add_argument("--think_summarize", action="store_true")
     ### End Of Modes, only 1 can be true ###
     parser.add_argument("--test_logging", action="store_true")
+    ### Think Only and Think Summarize Args ###
+    parser.add_argument("--think_tokens", type=int, default=16384)
+    parser.add_argument("--summary_tokens", type=int, default=8192)
+    parser.add_argument("--num_rounds", type=int, default=10)
+    parser.add_argument("--end_thinking", type=str, default="</think>\nFinal Answer: ")
+    parser.add_argument("--stop_token", type=str, default="</think>")
+    parser.add_argument("--debug_prompts", action="store_true")
+    ### End Of Think Only and Think Summarize Args ###
     ### LogProb Subselect Args ###
     parser.add_argument("--sgen", type=int, default=8)
     parser.add_argument("--stok", type=int, default=16)
@@ -604,6 +777,7 @@ def parse_args():
 
 
 def main():
+    random.seed(42)
     global big_model_proc, small_model_proc, service_args
 
     service_args = parse_args()
