@@ -437,17 +437,8 @@ def main():
         service_args.max_iterations = 32768 // (service_args.stok * service_args.ltok) 
 
     # Determine which models to launch based on mode
-    need_big_model = (not service_args.small_model_only or 
-                      service_args.big_model_only or 
-                      service_args.spec_rewrite or 
-                      service_args.logprob_subselect or 
-                      service_args.placeholder_mode)
-    
-    need_small_model = (not service_args.big_model_only or 
-                        service_args.small_model_only or 
-                        service_args.spec_rewrite or 
-                        service_args.logprob_subselect or 
-                        service_args.placeholder_mode)
+    need_big_model = not service_args.small_model_only
+    need_small_model = not service_args.big_model_only
 
 
     # 1) Check if the big model is needed and launch if necessary
