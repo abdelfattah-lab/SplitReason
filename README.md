@@ -123,6 +123,15 @@ Example (Random switching baseline):
             cmd.append("--random_switch")
 ```
 
+- Update lm-eval
+```
+
+cp lm_eval_files/vllm_speculative.py lm-evaluation-harness/lm_eval/models/
+
+cd lm-evaluation-harness
+python -m pip install -e .[math,vllm]
+```
+
 - Add assertion in test_spec.py
     - `if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch]) != 1:`
 

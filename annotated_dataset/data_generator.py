@@ -10,11 +10,11 @@ from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B")
 
 load_dotenv("./../.env")
-current_model = "gpt-4o"
+current_model = "deepseek-chat"
 START_BIGMODEL = "<bigmodel>"
 END_BIGMODEL = "<\\bigmodel>"
 
-if current_model == "deepseek-reasoner":
+if current_model in ["deepseek-reasoner", "deepseek-chat"]:
     client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
 else:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -427,7 +427,10 @@ annotated_ds = ds_small.map(process_example, batched=False)
 # will have the CoT text with <B>...<EoB> around the chosen "hard" sentences.
 
 # 5) If you wish, save to disk
-annotated_ds.save_to_disk("OpenR1_Math_Annotated")
+if current_model in ["deepseek-reasoner", "deepseek-chat"]:
+    annotated_ds.save_to_disk("OpenR1_Math_Annotated_DeepSeek")
+else:
+    annotated_ds.save_to_disk("OpenR1_Math_Annotated_GPT")
 
 
 # if __name__ == "__main__":

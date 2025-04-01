@@ -151,6 +151,25 @@ class SpeculativeVLLM(TemplateLM):
         self.switch_ratio = self.service_params.get("switch_ratio", 1)
         self.switch_chunk = self.service_params.get("switch_chunk", 16)
         self.sequential_scale = self.service_params.get("sequential_scale", 0)
+        self.small_first = self.service_params.get("small_first", False)
+
+        # Gather the arguments that your spec_service.py expects:
+        self.big_model = self.service_params.get("big_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
+        self.big_model_port = self.service_params.get("big_model_port", 8000)
+        self.big_model_gpus = str(self.service_params.get("big_model_gpus", "0,1")).replace("|", ",")
+        self.small_model = self.service_params.get("small_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
+        self.small_model_port = self.service_params.get("small_model_port", 8001)
+        self.small_model_gpus = str(self.service_params.get("small_model_gpus", "2")).replace("|", ",")
+        
+        self.thinking_n_ignore = self.service_params.get("thinking_n_ignore", 2)
+        self.drafting_n = self.service_params.get("drafting_n", 1)
+        self.bloat_tokens = self.service_params.get("bloat_tokens", 0)
+        self.max_tokens = self.service_params.get("max_tokens", 16384)
+        self.terminating_string = self.service_params.get(
+            "terminating_string",
+            r"\\n Put your final answer within \boxed{}."
+        )
+        self.test_logging = self.service_params.get("test_logging", False)
 
 
         self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
@@ -217,23 +236,20 @@ class SpeculativeVLLM(TemplateLM):
         # Now start the service fresh with updated arguments
         eval_logger.info("[SpeculativeVLLM] Launching spec_service.py...")
 
-        # Gather the arguments that your spec_service.py expects:
-        big_model = self.service_params.get("big_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
-        big_model_port = self.service_params.get("big_model_port", 8000)
-        big_model_gpus = str(self.service_params.get("big_model_gpus", "0,1")).replace("|", ",")
-        small_model = self.service_params.get("small_model", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
-        small_model_port = self.service_params.get("small_model_port", 8001)
-        small_model_gpus = str(self.service_params.get("small_model_gpus", "2")).replace("|", ",")
-        
-        thinking_n_ignore = self.service_params.get("thinking_n_ignore", 2)
-        drafting_n = self.service_params.get("drafting_n", 1)
-        bloat_tokens = self.service_params.get("bloat_tokens", 0)
-        max_tokens = self.service_params.get("max_tokens", 16384)
-        terminating_string = self.service_params.get(
-            "terminating_string",
-            r"\\n Put your final answer within \boxed{}."
-        )
 
+        # Gather the arguments that your spec_service.py expects:
+        big_model = self.big_model
+        big_model_port = self.big_model_port
+        big_model_gpus = self.big_model_gpus
+        small_model = self.small_model
+        small_model_port = self.small_model_port
+        small_model_gpus = self.small_model_gpus
+        
+        thinking_n_ignore = self.thinking_n_ignore
+        drafting_n = self.drafting_n
+        bloat_tokens = self.bloat_tokens
+        max_tokens = self.max_tokens
+        terminating_string = self.terminating_string
         cmd = [
             "python", self.service_script_path,
             f"--big_model={big_model}",
@@ -261,25 +277,21 @@ class SpeculativeVLLM(TemplateLM):
 
         if self.random_switch:
             cmd.append("--random_switch")
-        if self.service_params.get("small_first", False):
+        if self.small_first:
             cmd.append("--small_first")
-        if self.service_params.get("spec_rewrite", False):
+        if self.spec_rewrite:
             cmd.append("--spec_rewrite")
-        if self.service_params.get("logprob_subselect", False):
+        if self.logprob_subselect:
             cmd.append("--logprob_subselect")
-        if self.service_params.get("big_model_only", False):
+        if self.big_model_only:
             cmd.append("--big_model_only")
-        if self.service_params.get("small_model_only", False):
+        if self.small_model_only:
             cmd.append("--small_model_only")
-        if self.service_params.get("full_rewrite", False):
-            cmd.append("--full_rewrite")
-        if self.service_params.get("draft_propose_ignore_str", False):
-            cmd.append("--draft_propose_ignore_str")
-        if self.service_params.get("terminate_on_exit", False):
-            cmd.append("--terminate_on_exit")
-        if self.service_params.get("test_logging", False):
+        if self.placeholder_mode:
+            cmd.append("--placeholder_mode")
+        if self.test_logging:
             cmd.append("--test_logging")
-
+        
         eval_logger.info(f"[SpeculativeVLLM] Launching: {' '.join(cmd)}")
         env = os.environ.copy()
         self.service_proc = subprocess.Popen(cmd, env=env)
