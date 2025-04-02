@@ -7,6 +7,17 @@ from dotenv import load_dotenv
 from datasets import load_dataset
 # load a tokenizer meta-llama/Llama-3.2-3B
 from transformers import AutoTokenizer
+import concurrent.futures
+
+import re
+import difflib
+import openai
+from openai import OpenAI
+from dotenv import load_dotenv
+from transformers import AutoTokenizer
+import os
+import time
+from datasets import load_dataset, Dataset, concatenate_datasets
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B")
 
 load_dotenv("./../.env")
@@ -315,6 +326,8 @@ def insert_annotations(gen_text, matches):
     annotated.append(gen_text[last_pos:])
     return "".join(annotated)
 
+
+
 def process_example(example, top_percent=0.4, llm_top_k=None):
     """
     For each generation in example["generations"]:
@@ -340,98 +353,159 @@ def process_example(example, top_percent=0.4, llm_top_k=None):
             k = llm_top_k
         else:
             k = max(1, int(top_percent * num_sents))
-        
-        # 3. Query DeepSeek R1
-        hard_candidates = call_deepseek_r1_for_difficult_sentences(gen_text, k, client, current_model)
-        
-        # 3. For each snippet, find the best fuzzy match in the entire gen_text
-        match_offsets = []
-        for hc in hard_candidates:
-            best = find_best_substring_match(hc, gen_text, min_ratio=0.5)
-            if best is not None:
-                (start_idx, end_idx, ratio) = best
-                match_offsets.append((start_idx, end_idx))
+        try:
+            # 3. Query DeepSeek R1
+            hard_candidates = call_deepseek_r1_for_difficult_sentences(gen_text, k, client, current_model)
+            # 3. For each snippet, find the best fuzzy match in the entire gen_text
+            match_offsets = []
+            for hc in hard_candidates:
+                best = find_best_substring_match(hc, gen_text, min_ratio=0.5)
+                if best is not None:
+                    (start_idx, end_idx, ratio) = best
+                    match_offsets.append((start_idx, end_idx))
 
-        # 4. Sort by start index, handle overlaps if needed
-        match_offsets.sort(key=lambda x: x[0])
+            # 4. Sort by start index, handle overlaps if needed
+            match_offsets.sort(key=lambda x: x[0])
 
-        # (Optional) merge or skip overlapping / almost contiguous matches:
-        merged = []
-        for (s, e) in match_offsets:
-            if not merged:
-                merged.append((s, e))
-            else:
-                old_s, old_e = merged[-1]
-                # If the new interval starts after old_e + 5, it's sufficiently separate:
-                if s > old_e + 10:
+            # (Optional) merge or skip overlapping / almost contiguous matches:
+            merged = []
+            for (s, e) in match_offsets:
+                if not merged:
                     merged.append((s, e))
                 else:
-                    # Overlapping or contiguous with old_e
-                    merged[-1] = (old_s, max(old_e, e))
+                    old_s, old_e = merged[-1]
+                    # If the new interval starts after old_e + 5, it's sufficiently separate:
+                    if s > old_e + 10:
+                        merged.append((s, e))
+                    else:
+                        # Overlapping or contiguous with old_e
+                        merged[-1] = (old_s, max(old_e, e))
 
-        offload_chars = sum([x[1] - x[0] for x in merged])
-        gen_text_tokens = len(tokenizer.tokenize(gen_text))
-        offload_tokenset = [len(tokenizer.tokenize(gen_text[x[0]:x[1]])) for x in merged]
-        offload_tokens = sum(offload_tokenset)
+            offload_chars = sum([x[1] - x[0] for x in merged])
+            gen_text_tokens = len(tokenizer.tokenize(gen_text))
+            offload_tokenset = [len(tokenizer.tokenize(gen_text[x[0]:x[1]])) for x in merged]
+            offload_tokens = sum(offload_tokenset)
 
-        total_chars = len(gen_text)
-        print(f"Offloaded {offload_chars} / {total_chars} total chars\t Tokens: {offload_tokens} / {gen_text_tokens} \t\t Per-offload #Tokens: {offload_tokens / len(merged)}, \t\t Percentage Offload: {offload_chars / total_chars:.2%}")
-        
-        # 5. Insert <B>/<EoB>
-        annotated_text = insert_annotations(gen_text, merged)
-        new_annotated.append(annotated_text)
+            total_chars = len(gen_text)
+            print(f"Offloaded {offload_chars} / {total_chars} total chars\t Tokens: {offload_tokens} / {gen_text_tokens} \t\t Per-offload #Tokens: {offload_tokens / len(merged)}, \t\t Percentage Offload: {offload_chars / total_chars:.2%}")
+            
+            # 5. Insert <B>/<EoB>
+            annotated_text = insert_annotations(gen_text, merged)
+            new_annotated.append(annotated_text)
+        except Exception as e:
+            # If the LLM fails, we can just skip this example
+            print(f"Error processing example: {gen_text} \n{e}")
+            new_annotated.append(f"{START_BIGMODEL}Error processing Due To {e} \n {END_BIGMODEL}")
 
     example["annotated_generations"] = new_annotated
     return example
-    #     # 4. Fuzzy match them to find indices
-    #     hard_indices = set()
-    #     for hc in hard_candidates:
-    #         idx = fuzzy_match_index(hc, sentences, cutoff=0.5)
-    #         if idx is not None:
-    #             hard_indices.add(idx)
-    #     import pdb; pdb.set_trace()
-    #     # 5. Annotate
-    #     annotated_text = annotate_hard_sentences(sentences, hard_indices)
-    #     new_annotated.append(annotated_text)
-    
-    # example["annotated_generations"] = new_annotated
-    # return example
 
+
+
+
+def process_batch_in_parallel(batch, top_percent=0.4, llm_top_k=None):
+    annotated_batch = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(batch)) as executor:
+        # schedule jobs
+        futures = []
+        for ex in batch:
+            futures.append(executor.submit(process_example, ex, top_percent, llm_top_k))
+        
+        # collect results as they finish
+        for f in concurrent.futures.as_completed(futures):
+            annotated_example = f.result()
+            annotated_batch.append(annotated_example)
+    
+    return annotated_batch
+
+ds = load_dataset("open-r1/OpenR1-Math-220k", "default")
+
+ds_small = ds["train"].select(range(20))
+
+processed_indices = set()
+if os.path.exists("processed_ids.txt"):
+    with open("processed_ids.txt", "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                processed_indices.add(int(line))
+
+if os.path.exists("OpenR1_Math_Annotated_DeepSeek"):
+    partial_dataset = load_from_disk("OpenR1_Math_Annotated_DeepSeek")
+    all_results = partial_dataset.to_list()
+else:
+    partial_dataset = None
+
+num_parallel = 10
+all_results = []
+chunk_counter = 0
+
+for start_idx in tqdm(range(0, len(ds_small), num_parallel), desc="Processing batches"):
+    end_idx = min(start_idx + num_parallel, len(ds_small))
+    batch_indices = range(start_idx, end_idx)
+    
+    # Build a sub-batch that only includes unprocessed examples
+    sub_batch = []
+    sub_batch_indices = []
+    for i in batch_indices:
+        if i not in processed_indices:
+            sub_batch.append(ds_small[i])
+            sub_batch_indices.append(i)
+    
+    if not sub_batch:
+        continue  # skip if entire chunk was already processed
+
+    # Now process in parallel
+    annotated_sub_batch = process_batch_in_parallel(sub_batch)
+    
+    # Append results to `all_results`, also mark them in processed file
+    for ex_idx, annotated_example in zip(sub_batch_indices, annotated_sub_batch):
+        all_results.append(annotated_example)
+        # Mark as processed
+        with open("processed_ids.txt", "a") as f:
+            f.write(str(ex_idx) + "\n")
+        processed_indices.add(ex_idx)
+
+    chunk_counter += 1
+    # Maybe save partial checkpoint every 5 chunks
+    if chunk_counter % 5 == 0:
+        partial_dataset = Dataset.from_list(all_results)
+        if current_model in ["deepseek-reasoner", "deepseek-chat"]:
+            partial_dataset.save_to_disk("OpenR1_Math_Annotated_DeepSeek")
+        else:
+            partial_dataset.save_to_disk("OpenR1_Math_Annotated_GPT")
+
+        print(f"Checkpoint saved at chunk {chunk_counter}")
+
+# Optionally, after the loop finishes, save the final dataset:
+final_dataset = Dataset.from_list(all_results)
+if current_model in ["deepseek-reasoner", "deepseek-chat"]:
+    final_dataset.save_to_disk("OpenR1_Math_Annotated_DeepSeek_Final")
+else:
+    final_dataset.save_to_disk("OpenR1_Math_Annotated_GPT_Final")
+
+print("Done!")
 
 ##################################
 # 6. Running it on the dataset
 ##################################
 
-# def main():
-# 1) Load dataset
-ds = load_dataset("open-r1/OpenR1-Math-220k", "default")
-print(ds)
+    # # def main():
+    # # 1) Load dataset
+    # ds = load_dataset("open-r1/OpenR1-Math-220k", "default")
 
-# Just take 100 examples from the train split
-ds_small = ds["train"].select(range(10))
+    # # Just take 100 examples from the train split
+    # ds_small = ds["train"].select(range(10))
 
-# Now ds_small is a Dataset object containing only 100 rows
-print(ds_small)
+    # # Now ds_small is a Dataset object containing only 100 rows
+    # print(ds_small)
 
-# 2) Configure your DeepSeek R1 API details (replace with real key/URL)
-  # or set in .env file
-# TODO: The 'openai.api_base' option isn't read in the client API. You will need to pass it when you instantiate the client, e.g. 'OpenAI(api_base="https://api.deepseek.com")'
-# openai.api_base = "https://api.deepseek.com"   # or "https://api.deepseek.com/v1"
+    # # 3) Process & annotate
+    # annotated_ds = ds_small.map(process_example, batched=True)
 
-# 3) Process & annotate
-# annotated_ds = ds.map(process_example, batched=False)
-annotated_ds = ds_small.map(process_example, batched=False)
+    # # 5) If you wish, save to disk
+    # if current_model in ["deepseek-reasoner", "deepseek-chat"]:
+    #     annotated_ds.save_to_disk("OpenR1_Math_Annotated_DeepSeek")
+    # else:
+    #     annotated_ds.save_to_disk("OpenR1_Math_Annotated_GPT")
 
-# 4) Now annotated_ds has an 'annotated_generations' column
-# e.g., annotated_ds["train"][0]["annotated_generations"]
-# will have the CoT text with <B>...<EoB> around the chosen "hard" sentences.
-
-# 5) If you wish, save to disk
-if current_model in ["deepseek-reasoner", "deepseek-chat"]:
-    annotated_ds.save_to_disk("OpenR1_Math_Annotated_DeepSeek")
-else:
-    annotated_ds.save_to_disk("OpenR1_Math_Annotated_GPT")
-
-
-# if __name__ == "__main__":
-#     main()
