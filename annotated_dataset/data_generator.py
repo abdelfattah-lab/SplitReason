@@ -99,8 +99,10 @@ Each snippet must be verbatim, enclosed in the tags:
 Provide some snippets even if the CoT is trivial. No other text or commentary outside the tags.
 """.strip()
 
-    max_attempts = 1
+    templist = [0, 0.3, 0.6]
+    max_attempts = 3
     for attempt in range(max_attempts):
+        temperature = templist[attempt]
         try:
             response = client.chat.completions.create(
                 model=current_model,
@@ -108,9 +110,8 @@ Provide some snippets even if the CoT is trivial. No other text or commentary ou
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message},
                 ],
-                temperature=0.0,
+                temperature=temperature,
             )
-            # If we got here, call succeeded; break out of the retry loop
             break
         except Exception as e:
             # write system_message and user_message to a file
@@ -122,7 +123,8 @@ Provide some snippets even if the CoT is trivial. No other text or commentary ou
                 f.write(f"System message: {system_message}\n")
             with open(f"attempts/user_message+{uid}.txt", "a") as f:
                 f.write(f"User message: {user_message}\n")
-            # Print debugging info
+            with open(f"attempts/response+{uid}.txt", "a") as f:
+                f.write(f"Error: {e}\n")
             print(f"\n\n\n Loc-Index: {bidx}\t[Attempt {attempt+1}/{max_attempts}]\tResponse error: {e}\n\n\n")
             # Otherwise, wait for 60 seconds and retry
             if attempt < max_attempts - 1:
@@ -287,7 +289,7 @@ def process_batch_in_parallel(batch, top_percent=0.4, llm_top_k=None):
 
 ds = load_dataset("open-r1/OpenR1-Math-220k", "default")
 
-ds_small = ds["train"].select(range(5500))
+ds_small = ds["train"].select(range(9500))
 
 processed_indices = set()
 if os.path.exists("processed_ids.txt"):
@@ -314,7 +316,7 @@ else:
     partial_dataset = None
     all_results = []
 
-num_parallel = 200
+num_parallel = 10
 chunk_counter = 0
 
 for start_idx in tqdm(range(0, len(ds_small), num_parallel), desc="Processing batches"):
