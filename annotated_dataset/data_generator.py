@@ -222,6 +222,9 @@ def process_example(example, bidx=None, top_percent=0.4, llm_top_k=None):
     new_annotated = []
     
     for genid, gen_text in enumerate(example["generations"]):
+        if genid > 0:
+            # Stop annotated anything except the first example
+            new_annotated.append(gen_text)
         try:
             hard_candidates = call_deepseek_r1_for_difficult_snippets_fraction(gen_text, bidx, client, current_model, desired_fraction=0.2)
             match_offsets = []
