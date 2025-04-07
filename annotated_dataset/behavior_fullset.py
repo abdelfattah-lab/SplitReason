@@ -107,7 +107,9 @@ for i, example in enumerate(tqdm(ds_deepseek)):
         continue
     
     # text = generations[0]  # take the first generation
-    for text in generations:
+    for idxcurr, text in enumerate(generations):
+        if idxcurr > 0:
+            continue  # skip all but the first generation
         mask = get_bigmodel_mask(text, exp_track)
         
         length = len(text)

@@ -107,6 +107,10 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
             count += 0.25
         if text.count("\n</answer>") == 1:
             count += 0.25
+        if text.count("<bigmodel>") == 1:
+            count += 0.25
+        if text.count("</bigmodel>") == 1:
+            count += 0.25
         return count
 
     contents = [completion[0]["content"] for completion in completions]

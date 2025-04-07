@@ -292,7 +292,7 @@ def process_batch_in_parallel(batch, top_percent=0.4, llm_top_k=None):
 
 ds = load_dataset("open-r1/OpenR1-Math-220k", "default")
 
-ds_small = ds["train"].select(range(9500))
+ds_small = ds["train"].select(range(15000))
 
 processed_indices = set()
 if os.path.exists("processed_ids.txt"):
@@ -308,7 +308,7 @@ if os.path.exists("OpenR1_Math_Annotated_DeepSeek"):
                for idx, annots in enumerate(partial_dataset["annotated_generations"])]
     to_remove = []
     for idx, lens in genlens:
-        if any(length < 200 for length in lens):
+        if any(length < 160 for length in lens):
             print(f"Discarding example {idx} with lengths {lens}")
             processed_indices.discard(idx)
             to_remove.append(idx)
@@ -319,7 +319,7 @@ else:
     partial_dataset = None
     all_results = []
 
-num_parallel = 10
+num_parallel = 50
 chunk_counter = 0
 
 for start_idx in tqdm(range(0, len(ds_small), num_parallel), desc="Processing batches"):
