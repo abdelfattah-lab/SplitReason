@@ -30,7 +30,7 @@ lr_scheduler_kwargs:
 packing: true
 max_length: 16384
 max_steps: -1
-num_train_epochs: 1
+num_train_epochs: 5
 output_dir: data/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner
 overwrite_output_dir: true
 per_device_eval_batch_size: 4

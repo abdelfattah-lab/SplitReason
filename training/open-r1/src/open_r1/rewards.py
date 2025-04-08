@@ -83,38 +83,200 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     return rewards
 
 
+# def format_reward(completions, **kwargs):
+#     """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""
+#     pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
+#     completion_contents = [completion[0]["content"] for completion in completions]
+#     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
+#     return [1.0 if match else 0.0 for match in matches]
 def format_reward(completions, **kwargs):
-    """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""
-    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
-    completion_contents = [completion[0]["content"] for completion in completions]
-    matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
-    return [1.0 if match else 0.0 for match in matches]
+    """
+    Reward function that checks:
+    1) If the entire response is in the correct format:
+       <think>...</think>\n<answer>...</answer>
+    2) Each <bigmodel> is properly closed by a corresponding </bigmodel>
+       in the correct order (no mismatched nesting).
+    Returns 1.0 if everything is valid, 0.0 otherwise.
+    """
+    rewards = []
+
+    # Regex to check the overall structure:
+    #   <think> ... </think> <answer> ... </answer>
+    # We allow arbitrary text (including newlines) in between, and
+    # require that we match from start to finish (the ^ and $).
+    main_pattern = re.compile(
+        r"^<think>\s*(.*?)\s*</think>\s*<answer>\s*(.*?)\s*</answer>\s*$",
+        re.DOTALL
+    )
+
+    for c in completions:
+        text = c[0]["content"]
+        # text = "<bigmodel>" + text
+
+        # 1) Check the main <think> ... </think> <answer> ... </answer> format
+        match = main_pattern.match(text)
+        if not match:
+            # Format not correct ⇒ reward = 0.0
+            rewards.append(0.0)
+            continue
+
+        # 2) Check that every <bigmodel> is matched with a </bigmodel> in correct order
+        #    We'll scan from left to right, tracking nesting.
+        bigmodel_tags = re.findall(r"<(/?bigmodel)>", text)
+        balance = 0 # WHILE PROMPT FORCES ONE <bigmodel> TAG START.
+        valid_bigmodel = True
+        for tag in bigmodel_tags:
+            if tag.startswith("/"):
+                # Closing tag
+                if balance <= 0:
+                    # We have a close without an open, mismatch
+                    valid_bigmodel = False
+                    break
+                balance -= 1
+            else:
+                # Opening tag
+                balance += 1
+
+        # If after scanning all <bigmodel> and </bigmodel>, we
+        # haven't returned to zero, there's a mismatch
+        if balance != 0:
+            valid_bigmodel = False
+
+        if valid_bigmodel:
+            rewards.append(1.0)
+        else:
+            rewards.append(0.0)
+
+    return rewards
+
+def coverage_reward(content: str) -> float:
+    """
+    Computes how much of the text is inside <bigmodel> ... </bigmodel> blocks,
+    and returns a piecewise linear reward:
+
+    - 0 <= ratio < 0.15: linearly 0 to +1
+    - 0.15 <= ratio <= 1.0: linearly from +1 down to -1
+    """
+
+    total_chars = len(content)
+    if total_chars == 0:
+        return 0.0
+
+    # Find all text inside <bigmodel>...</bigmodel>
+    segments = re.findall(r"<bigmodel>(.*?)</bigmodel>", content, re.DOTALL)
+    bigmodel_chars = sum(len(seg) for seg in segments)
+
+    r = bigmodel_chars / total_chars
+
+    # If no characters or no coverage:
+    if r <= 0:
+        return 0.0
+
+    # 1) 0 <= r < 0.15: linearly from 0 to +1
+    if r < 0.15:
+        return r / 0.15  # goes from 0.0 (when r=0) to 1.0 (when r=0.15)
+
+    # 2) 0.15 <= r <= 1.0: linearly from +1 at r=0.15 to -1 at r=1.0
+    #    slope = ( -1 - 1 ) / ( 1.0 - 0.15 ) = -2 / 0.85
+    slope = -2.0 / 0.85
+    intercept = 1.0 - (slope * 0.15)  # ensures continuity at r=0.15
+
+    val = slope * r + intercept
+    # Optionally, clamp so it never goes below -1 or above +1
+    # (in principle it shouldn't, but just a safety measure)
+    val = max(-1.0, min(val, 1.0))
+
+    return val
 
 
 def tag_count_reward(completions, **kwargs) -> list[float]:
-    """Reward function that checks if we produce the desired number of think and answer tags associated with `format_reward()`.
+    """
+    This reward checks if we produce the desired number of think/answer tags,
+    plus usage of <bigmodel> tags, plus coverage ratio of text inside
+    <bigmodel> ... </bigmodel>.
 
-    Adapted from: https://gist.github.com/willccbb/4676755236bb08cab5f4e54a0475d6fb#file-grpo_demo-py-L90
+    The final reward for each completion is a sum of:
+      1. +0.25 for exactly one <think> tag, +0.25 for matching </think>,
+         +0.25 for <answer>, +0.25 for </answer>.
+      2. +0.25 per <bigmodel> up to 4 occurrences, then -0.25 for each
+         occurrence above 4 (can go negative).
+      3. Additional coverage-based reward from coverage_reward(...).
     """
 
-    def count_tags(text: str) -> float:
-        count = 0.0
-        if text.count("<think>\n") == 1:
-            count += 0.25
-        if text.count("\n</think>\n") == 1:
-            count += 0.25
-        if text.count("\n<answer>\n") == 1:
-            count += 0.25
-        if text.count("\n</answer>") == 1:
-            count += 0.25
-        if text.count("<bigmodel>") == 1:
-            count += 0.25
-        if text.count("</bigmodel>") == 1:
-            count += 0.25
-        return count
+    def bigmodel_count_reward(n: int) -> float:
+        """
+        If we have n <bigmodel> tags (assumed matched by the same n </bigmodel> tags),
+        we want:
+         - +0.25 each for up to 4 bigmodel tags (so up to +1.0 total),
+         - then -0.25 for each one above 4.
+        """
+        if n <= 4:
+            return 0.5 * n
+        else:
+            # up to 4 => +1.0; above 4 => subtract 0.25 each
+            return 1.0 - 0.25 * (n - 4)
 
-    contents = [completion[0]["content"] for completion in completions]
-    return [count_tags(c) for c in contents]
+    rewards = []
+    for completion in completions:
+        text = completion[0]["content"]
+        # text = "<bigmodel>" + text
+
+        # (A) Base reward for having exactly one each of <think>, </think>, <answer>, </answer>
+        r = 0.0
+        if text.count("<think>\n") == 1:
+            r += 0.25
+        if text.count("\n</think>\n") == 1:
+            r += 0.25
+        if text.count("\n<answer>\n") == 1:
+            r += 0.25
+        if text.count("\n</answer>") == 1:
+            r += 0.25
+
+        # (B) Count <bigmodel> usage
+        open_count = text.count("<bigmodel>")
+        close_count = text.count("</bigmodel>")
+        # Only add the bigmodel reward if open and close match
+        # (Otherwise, the format is incorrect for bigmodel usage.)
+        # if open_count == close_count:
+        r += bigmodel_count_reward(open_count)
+
+        # # (C) Coverage-based reward
+        # coverage_r = coverage_reward(text)
+        # r += coverage_r
+
+        rewards.append(r)
+
+    return rewards
+
+
+# def tag_count_reward(completions, **kwargs) -> list[float]:
+#     """Reward function that checks if we produce the desired number of think and answer tags associated with `format_reward()`.
+
+#     Adapted from: https://gist.github.com/willccbb/4676755236bb08cab5f4e54a0475d6fb#file-grpo_demo-py-L90
+#     """
+
+#     def count_tags(text: str) -> float:
+#         count = 0.0
+#         if text.count("<think>\n") == 1:
+#             count += 0.25
+#         if text.count("\n</think>\n") == 1:
+#             count += 0.25
+#         if text.count("\n<answer>\n") == 1:
+#             count += 0.25
+#         if text.count("\n</answer>") == 1:
+#             count += 0.25
+#         if text.count("<bigmodel>") > 0:
+#             count += 0.25 * text.count("<bigmodel>")
+#             if text.count("<bigmodel>") > 6:
+#                 count -= 0.25 * text.count("<bigmodel>")
+#         if text.count("</bigmodel>") > 0:
+#             count += 0.25 * text.count("</bigmodel>")\
+#             if text.count("</bigmodel>") > 6:
+#                 count -= 0.25 * text.count("</bigmodel>")
+#         return count
+
+#     contents = [completion[0]["content"] for completion in completions]
+#     return [count_tags(c) for c in contents]
 
 
 def reasoning_steps_reward(completions, **kwargs):
