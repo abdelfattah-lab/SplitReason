@@ -436,39 +436,50 @@ def main():
     if service_args.max_iterations is None:
         service_args.max_iterations = 32768 // (service_args.stok * service_args.ltok) 
 
-    # 1) Check if the big model is up. If not, we launch it
-    print(f"[Service] Checking if big model server is up on port {service_args.big_model_port} ...")
-    if wait_for_server(f"http://localhost:{service_args.big_model_port}/ping", timeout=5):
-        print("[Service] Big model is already up.")
-    else:
-        big_model_proc = launch_big_model_vllm(service_args.big_model,
-                                               service_args.big_model_port,
-                                               service_args.big_model_gpus)
-        print("[Service] Waiting for big model server to be ready ...")
-        if not wait_for_server(f"http://localhost:{service_args.big_model_port}/ping"):
-            print("[Service] Big model server did not come up in time. Exiting.")
-            if big_model_proc is not None:
-                big_model_proc.terminate()
-            sys.exit(1)
-        print("[Service] Big model server is up.")
+    # Determine which models to launch based on mode
+    need_big_model = not service_args.small_model_only
+    need_small_model = not service_args.big_model_only
 
-    # 2) Check if small model is up. If not, we launch it
-    print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
-    if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
-        print("[Service] Small model is already up.")
+
+    # 1) Check if the big model is needed and launch if necessary
+    if need_big_model:
+        print(f"[Service] Checking if big model server is up on port {service_args.big_model_port} ...")
+        if wait_for_server(f"http://localhost:{service_args.big_model_port}/ping", timeout=5):
+            print("[Service] Big model is already up.")
+        else:
+            big_model_proc = launch_big_model_vllm(service_args.big_model,
+                                                service_args.big_model_port,
+                                                service_args.big_model_gpus)
+            print("[Service] Waiting for big model server to be ready ...")
+            if not wait_for_server(f"http://localhost:{service_args.big_model_port}/ping"):
+                print("[Service] Big model server did not come up in time. Exiting.")
+                if big_model_proc is not None:
+                    big_model_proc.terminate()
+                sys.exit(1)
+            print("[Service] Big model server is up.")
     else:
-        small_model_proc = launch_small_model(service_args.small_model,
-                                              service_args.small_model_port,
-                                              service_args.small_model_gpus)
-        print("[Service] Waiting for small model server to be ready ...")
-        if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
-            print("[Service] Small model server did not come up in time. Exiting.")
-            if small_model_proc is not None:
-                small_model_proc.terminate()
-            if big_model_proc is not None:
-                big_model_proc.terminate()
-            sys.exit(1)
-        print("[Service] Small model server is up.")
+        print("[Service] Big model is not needed. Skipping...")
+
+    # 2) Check if small model is needed and launch if necessary
+    if need_small_model:
+        print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
+        if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
+            print("[Service] Small model is already up.")
+        else:
+            small_model_proc = launch_small_model(service_args.small_model,
+                                                service_args.small_model_port,
+                                                service_args.small_model_gpus)
+            print("[Service] Waiting for small model server to be ready ...")
+            if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
+                print("[Service] Small model server did not come up in time. Exiting.")
+                if small_model_proc is not None:
+                    small_model_proc.terminate()
+                if big_model_proc is not None and need_big_model:
+                    big_model_proc.terminate()
+                sys.exit(1)
+            print("[Service] Small model server is up.")
+    else:
+        print("[Service] Small model is not needed. Skipping...")
 
     # 3) Start our Flask app
     try:
@@ -478,10 +489,10 @@ def main():
     finally:
         if service_args.terminate_on_exit:
             print("[Service] Terminating vLLM model servers because --terminate_on_exit was set.")
-            if small_model_proc is not None:
+            if small_model_proc is not None and need_small_model:
                 small_model_proc.send_signal(signal.SIGTERM)
                 small_model_proc.wait()
-            if big_model_proc is not None:
+            if big_model_proc is not None and need_big_model:
                 big_model_proc.send_signal(signal.SIGTERM)
                 big_model_proc.wait()
         print("[Service] Service shutting down.")
