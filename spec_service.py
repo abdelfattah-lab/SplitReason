@@ -136,6 +136,56 @@ def batched_generate_text_vllm(
 
     return results, avg_latency
 
+def batched_generate_text_with_tokens_vllm(
+    prompts: List[str], 
+    port: int = 8000, 
+    temperature: float = 0.6, 
+    max_tokens: int = 128, 
+    model: str = "my-model", 
+    requests=None,
+    logprobs: int = 1
+) -> Tuple[List[dict], List[List[str]], float]:
+    """
+    Same as batched_generate_text_vllm, but also returns list of tokens for each completion.
+    """
+    if requests is None:
+        import requests as _requests
+        requests = _requests
+
+    url = f"http://localhost:{port}/v1/completions"
+    payload = {
+        "model": model,
+        "prompt": prompts,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stop": ["<bigmodel>"],
+        "include_stop_str_in_output": True,
+        "logprobs": logprobs,
+        "n": 1,
+    }
+
+    start_time = time.time()
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    end_time = time.time()
+
+    resp_json = resp.json()
+    choices = resp_json["choices"]
+
+    results = []
+    token_lists = []
+
+    for choice in choices:
+        results.append({
+            "choices": [choice]
+        })
+        token_info = choice.get("logprobs", {})
+        tokens = token_info.get("tokens", [])
+        token_lists.append(tokens)
+
+    avg_latency = (end_time - start_time) / max(1, len(prompts))
+    return results, token_lists, avg_latency
+
 def batched_eval_logprob_vllm(
     text_batch: List[str],
     big_model_port: int,
@@ -387,6 +437,7 @@ def speculative_reason():
             small_model_port=service_args.small_model_port,
             requests=requests,
             batched_generate_text_vllm=batched_generate_text_vllm,
+            batched_generate_text_with_tokens_vllm=batched_generate_text_with_tokens_vllm,
             batched_eval_logprob_vllm=batched_eval_logprob_vllm,
             terminating_string=terminating_string,
             test_logging=test_logging,

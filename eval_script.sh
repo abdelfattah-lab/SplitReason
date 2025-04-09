@@ -30,9 +30,9 @@ export VLLM_LOGGING_CONFIG_PATH=logging_config.json
 
 
 
-# python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8007,big_model_gpus=1|2,small_model=akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner,small_model_port=8003,small_model_gpus=0,max_tokens=16384,switch_chunk=16,spec_reason=True,switch_ratio=1"  \
-#      --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/specreason_test0 --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
-python test_spec.py --test_logging --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --big_model_gpus 1,2 --small_model_gpus 0 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner --spec_reason --small_model_port 8003 --big_model_port 8007
+python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8007,big_model_gpus=1|2,small_model=akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner,small_model_port=8003,small_model_gpus=0,max_tokens=16384,switch_chunk=16,spec_reason=True,switch_ratio=1"  \
+     --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/specreason_test --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
+# python test_spec.py --test_logging --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --big_model_gpus 1,2 --small_model_gpus 0 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner --spec_reason --small_model_port 8003 --big_model_port 8007
 
 
 

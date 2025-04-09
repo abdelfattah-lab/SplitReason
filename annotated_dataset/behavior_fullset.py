@@ -3,33 +3,57 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datasets import load_from_disk
 
-def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel>"):
-    """
-    Return a list of 0/1 (length == len(text)) indicating
-    which character positions are inside <bigmodel> ... <\bigmodel>.
-    """
+def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
     mask = [0] * len(text)
     start_index = 0
-    
+
     while True:
-        # Find next opening tag
         open_pos = text.find(open_tag, start_index)
         if open_pos == -1:
-            break
-        
-        # Find the corresponding closing tag
+            break  # no more openings
+
         close_pos = text.find(close_tag, open_pos + len(open_tag))
         if close_pos == -1:
+            # If we can't find a close tag, mark until the end of the text
+            for i in range(open_pos, len(text)):
+                mask[i] = 1
             break
-        
-        region_end = min(close_pos + len(close_tag), len(text))
-        for i in range(open_pos, region_end):
-            mask[i] = 1
-        
-        start_index = region_end
-    # if sum(mask) > 0.8 * len(mask):
-        # import pdb; pdb.set_trace()
+        else:
+            # Mark the region from <bigmodel> ... </bigmodel>
+            region_end = close_pos + len(close_tag)
+            for i in range(open_pos, region_end):
+                mask[i] = 1
+            start_index = region_end
+
     return mask
+    
+# def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel>"):
+#     """
+#     Return a list of 0/1 (length == len(text)) indicating
+#     which character positions are inside <bigmodel> ... <\bigmodel>.
+#     """
+#     mask = [0] * len(text)
+#     start_index = 0
+    
+#     while True:
+#         # Find next opening tag
+#         open_pos = text.find(open_tag, start_index)
+#         if open_pos == -1:
+#             break
+        
+#         # Find the corresponding closing tag
+#         close_pos = text.find(close_tag, open_pos + len(open_tag))
+#         if close_pos == -1:
+#             break
+        
+#         region_end = min(close_pos + len(close_tag), len(text))
+#         for i in range(open_pos, region_end):
+#             mask[i] = 1
+        
+#         start_index = region_end
+#     # if sum(mask) > 0.8 * len(mask):
+#         # import pdb; pdb.set_trace()
+#     return mask
 
 # 1) Load your annotated datasetfrom datasets import load_from_disk
 

@@ -137,8 +137,8 @@ def main():
         print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, spec_reason, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
         sys.exit(1)
 
-    kill_cmd = "fuser -k -9 /dev/nvidia*"
-    subprocess.run(kill_cmd, shell=True)
+    # kill_cmd = "fuser -k -9 /dev/nvidia*"
+    # subprocess.run(kill_cmd, shell=True)
 
     if ping_service(args.host, args.service_port):
         print("[test_spec] Service is already running; shutting it down.")

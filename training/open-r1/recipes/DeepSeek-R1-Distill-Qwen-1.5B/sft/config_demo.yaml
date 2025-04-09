@@ -17,7 +17,7 @@ gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-hub_model_id: DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner
+hub_model_id: DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_9k
 hub_strategy: every_save
 learning_rate: 5.0e-05
 log_level: info
@@ -30,10 +30,10 @@ packing: true
 max_length: 16384
 max_steps: -1
 num_train_epochs: 5
-output_dir: data/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner
+output_dir: data/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_9k
 overwrite_output_dir: true
-per_device_eval_batch_size: 4
-per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+per_device_train_batch_size: 8
 push_to_hub: true
 report_to:
 - wandb
