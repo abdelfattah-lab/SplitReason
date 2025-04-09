@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer, pipeline, AutoModelForCausalLM
 from datasets import load_dataset
 import torch
 from tqdm import tqdm
@@ -11,7 +11,15 @@ dataset = load_dataset("open-r1/OpenR1-Math-220k", split="train")
 
 # Set up generation pipeline
 device = 0 if torch.cuda.is_available() else -1
-generator = pipeline("text-generation", model="akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner", tokenizer=tokenizer, device=device)
+
+model = AutoModelForCausalLM.from_pretrained(
+    # "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner",
+    "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner",
+    device_map="auto",
+    torch_dtype=torch.bfloat16,
+    attn_implementation="flash_attention_2",
+)
+generator = pipeline("text-generation", model=model, tokenizer=tokenizer, torch_dtype=torch.bfloat16)
 
 # Helper to format messages using chat template
 def format_chat_prompt(messages):
@@ -30,7 +38,7 @@ for i in tqdm(range(10)):
     prompt = format_chat_prompt(messages)
 
     # Generate response
-    output = generator(prompt, max_new_tokens=4096, return_full_text=False, temperature=0.7)[0]["generated_text"]
+    output = generator(prompt, max_new_tokens=4096, return_full_text=False, do_sample=True, temperature=0.7)[0]["generated_text"]
     outputs[i] = output
 
     # Count <bigmodel> occurrences

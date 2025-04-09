@@ -49,15 +49,15 @@ for example in ds_deepseek:
             error_count += 1
     
     # Filter out generations containing the error
-    gens_filtered = [g for g in gens if "Error processing Due To" not in g]
     original_gens = example['generations']
-    for og_, fg_ in zip(original_gens, gens_filtered):
+    for og_, fg_ in zip(original_gens, gens):
         oglen_ = len(og_)
         fglen_ = len(fg_)
         oglens_ = (int(oglen_), int(oglen_*1.2))
         if fglen_ < oglens_[0] or fglen_ > oglens_[1]:
             print(f"Warning: generation length {fglen_} is not within 10% of original length {oglen_}")
             # import pdb; pdb.set_trace()
+    gens_filtered = [g for g in gens if "Error processing Due To" not in g]
     
     # Update the example’s generations
     example["annotated_generations"] = gens_filtered
@@ -100,7 +100,7 @@ qids = []
 string_lengths = []
 
 exp_track = 0
-for i, example in enumerate(tqdm(ds_deepseek)):
+for i, example in enumerate(tqdm(ds_deepseek_filtered)):
     # Some datasets store the generation in a list; adjust if your data structure differs
     generations = example["annotated_generations"]
     if not generations:
