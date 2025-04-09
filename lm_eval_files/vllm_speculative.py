@@ -140,6 +140,7 @@ class SpeculativeVLLM(TemplateLM):
         self.random_switch = self.service_params.get("random_switch", False)
         self.big_model_only = self.service_params.get("big_model_only", False)
         self.small_model_only = self.service_params.get("small_model_only", False)
+        self.spec_reason = self.service_params.get("spec_reason", False)
 
         # likewise for numeric fields:
         self.sgen = self.service_params.get("sgen", 256)
@@ -291,6 +292,8 @@ class SpeculativeVLLM(TemplateLM):
             cmd.append("--placeholder_mode")
         if self.test_logging:
             cmd.append("--test_logging")
+        if self.spec_reason:
+            cmd.append("--spec_reason")
         
         eval_logger.info(f"[SpeculativeVLLM] Launching: {' '.join(cmd)}")
         env = os.environ.copy()

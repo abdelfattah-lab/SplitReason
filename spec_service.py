@@ -10,7 +10,8 @@ import threading
 from flask import Flask, request, jsonify
 from typing import List, Tuple, Dict, Any, Optional, Union
 
-from modes.spec_rewrite import run_speculative_reason_flow
+from modes.spec_rewrite import run_speculative_rewrite_flow
+from modes.speculative_reasoning import run_speculative_reasoning_flow
 from modes.placeholder import run_placeholder_flow
 from modes.logprob_subselect import run_logprob_subselect_flow
 from modes.small_model_only import run_smallmodel_flow
@@ -103,6 +104,8 @@ def batched_generate_text_vllm(
         "prompt": prompts,         # pass the entire list of prompts at once
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "stop": ["<bigmodel>"],
+        "include_stop_str_in_output": True,
         "n": 1,                    # generate 1 completion per prompt
     }
 
@@ -160,6 +163,8 @@ def batched_eval_logprob_vllm(
         "max_tokens": max_tokens,   # typically 0 or 1 if purely evaluating logprobs
         "temperature": temperature,
         "logprobs": logprobs,
+        "stop": ["<bigmodel>"],
+        "include_stop_str_in_output": True,
         "n": 1,                     # 1 completion per prompt
     }
 
@@ -208,7 +213,9 @@ def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model
         "model": model,
         "prompt": prompt,
         "max_tokens": max_tokens,
-        "temperature": temperature
+        "temperature": temperature,
+        "stop": ["<bigmodel>"],
+        "include_stop_str_in_output": True,
     }
     start_time = time.time()
     resp = requests.post(url, json=payload)
@@ -328,7 +335,7 @@ def speculative_reason():
             sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
         )
     elif data.get("spec_rewrite", False):
-        final_reply, usage_data = run_speculative_reason_flow(
+        final_reply, usage_data = run_speculative_rewrite_flow(
             question=question,
             test_logging=test_logging,
             thinking_n_ignore=thinking_n_ignore,
@@ -365,6 +372,29 @@ def speculative_reason():
             switch_chunk=switch_chunk,
             requests=requests
         )
+    elif data.get("spec_reason", False):
+        final_reply, usage_data = run_speculative_reasoning_flow(
+            question=question,
+            sgen=data.get("sgen", service_args.sgen),
+            stok=data.get("stok", service_args.stok),
+            sdecay=data.get("sdecay", service_args.sdecay),
+            ltok=data.get("ltok", service_args.ltok),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            small_model=service_args.small_model,
+            small_model_port=service_args.small_model_port,
+            requests=requests,
+            batched_generate_text_vllm=batched_generate_text_vllm,
+            batched_eval_logprob_vllm=batched_eval_logprob_vllm,
+            terminating_string=terminating_string,
+            test_logging=test_logging,
+            lbound=data.get("lbound", service_args.lbound),
+            max_iterations=data.get("max_iterations", service_args.max_iterations),
+            sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
+        )
+
     else:
         return jsonify({"error": "Invalid mode specified in JSON payload"}), 400
 
@@ -392,6 +422,7 @@ def parse_args():
     ### Sequential scaling of big/small/logprob modes
     parser.add_argument("--sequential_scale", type=int, default=0)
     ### Modes, only 1 can be true ###
+    parser.add_argument("--spec_reason", action="store_true")
     parser.add_argument("--placeholder_mode", action="store_true")
     parser.add_argument("--spec_rewrite", action="store_true")
     parser.add_argument("--random_switch", action="store_true")
@@ -412,7 +443,7 @@ def parse_args():
     parser.add_argument("--switch_ratio", type=int, default=1, help="Switching ratio, always 1:{switch_ratio}")
     parser.add_argument("--switch_chunk", type=int, default=16)
     ### End Of Random Switch Args ###
-    ### Spec Rewrite Args ###
+    ### Spec Rewrite Args ### FOR NOW, WE DONT HAVE ANY REQUIRED PARAMS ON SPEC REASONING, SO WE JUST PASS EVERYTHING FOR QUICK TESTING
     parser.add_argument("--full_rewrite", action="store_true")
     parser.add_argument("--draft_propose_ignore_str", action="store_true")
     parser.add_argument("--bloat_tokens", type=int, default=0)

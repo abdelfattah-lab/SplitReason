@@ -98,6 +98,7 @@ def coverage_reward(content: str) -> float:
     - 0 <= ratio < 0.15: linearly 0 to +1
     - 0.15 <= ratio <= 1.0: linearly from +1 down to -1
     """
+    increase_till = 0.25
     try:
         total_chars = len(content)
         if total_chars == 0:
@@ -107,13 +108,12 @@ def coverage_reward(content: str) -> float:
         r = bigmodel_chars / total_chars
         if r <= 0:
             return 0.0
-        if r < 0.15:
-            return r / 0.15 
-        slope = -2.0 / 0.85
-        intercept = 1.0 - (slope * 0.15) 
+        if r < increase_till:
+            return r / increase_till
+        slope = -2.0 / (1.0 - increase_till)
+        intercept = 1.0 - (slope * increase_till)
         val = slope * r + intercept
-        val = max(-1.0, min(val, 1.0))
-        return val
+        return max(-1.0, min(val, 1.0))
     except Exception as e:
         print(f"Error in coverage_reward: {e}")
         return 0.0
@@ -136,7 +136,7 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
     """
 
     def bigmodel_count_reward(n: int) -> float:
-        if n <= 4:
+        if n <= 5:
             return 0.5 * n
         else:
             return 2.0 - 0.5 * (n - 4)
@@ -161,7 +161,7 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
         r += coverage_r
         # Penalty if closure not met. (no guarantees here, just trying.)
         if open_count != close_count:
-            r -= 1
+            r -= 2
         rewards.append(r)
     return rewards
 

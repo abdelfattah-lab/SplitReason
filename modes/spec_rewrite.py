@@ -3,7 +3,7 @@ import os
 import datetime
 
 
-def run_speculative_reason_flow(
+def run_speculative_rewrite_flow(
     question,
     test_logging,
     thinking_n_ignore,
