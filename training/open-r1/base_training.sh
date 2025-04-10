@@ -2,7 +2,7 @@
 
 ACCELERATE_LOG_LEVEL=info MASTER_PORT=29501 accelerate launch --main_process_port 29502 --config_file recipes/accelerate_configs/zero3.yaml \
     src/open_r1/sft.py \
-    --config recipes/DeepSeek-R1-Distill-Qwen-1.5B/sft/config_demo.yaml --wandb_project distilqwen_15b_9k --run_name Qwen-1.5B-SFT-SpecReason
+    --config recipes/DeepSeek-R1-Distill-Qwen-1.5B/sft/config_demo.yaml --wandb_project SpeculativeReasoning --run_name DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT
 
 # CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner
 

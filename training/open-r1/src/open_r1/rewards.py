@@ -98,7 +98,7 @@ def coverage_reward(content: str) -> float:
     - 0 <= ratio < 0.15: linearly 0 to +1
     - 0.15 <= ratio <= 1.0: linearly from +1 down to -1
     """
-    increase_till = 0.25
+    increase_till = 0.2
     try:
         total_chars = len(content)
         if total_chars == 0:
@@ -136,7 +136,7 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
     """
 
     def bigmodel_count_reward(n: int) -> float:
-        if n <= 5:
+        if n <= 6:
             return 0.5 * n
         else:
             return 2.0 - 0.5 * (n - 4)

@@ -17,6 +17,10 @@ from modes.logprob_subselect import run_logprob_subselect_flow
 from modes.small_model_only import run_smallmodel_flow
 from modes.big_model_only import run_bigmodel_flow
 from modes.random_switch_flow import run_random_switch_flow
+from transformers import AutoTokenizer
+
+big_model_tokenizer = None
+
 
 app = Flask(__name__)
 
@@ -36,6 +40,22 @@ def wait_for_server(url, timeout=600.0):
         time.sleep(1)
     return False
 
+def load_big_model_tokenizer(model_name: str):
+    """
+    Load and cache the big model's tokenizer once.
+    """
+    global big_model_tokenizer
+    if big_model_tokenizer is None:
+        big_model_tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    return big_model_tokenizer
+
+def approximate_token_count(text: str) -> int:
+    """
+    Returns the approximate number of tokens in `text` using the big model's tokenizer.
+    """
+    tokens = big_model_tokenizer.encode(text, add_special_tokens=False)
+    return len(tokens)
+
 def launch_big_model_vllm(big_model, port, gpu_ids):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
@@ -48,6 +68,7 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
+        # "--max-model-len", "16384",
         "--uvicorn-log-level=warning",
         # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
@@ -68,6 +89,7 @@ def launch_small_model(model_name, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
+        # "--max-model-len", "16384",
         "--uvicorn-log-level=warning",
         # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
@@ -94,47 +116,50 @@ def batched_generate_text_vllm(
       - A list of response JSON objects (each corresponding to an item in `prompts`).
       - A single float indicating the average latency for the entire batch.
     """
-    if requests is None:
-        import requests as _requests
-        requests = _requests
+    try:
+        if requests is None:
+            import requests as _requests
+            requests = _requests
 
-    url = f"http://localhost:{port}/v1/completions"
-    payload = {
-        "model": model,
-        "prompt": prompts,         # pass the entire list of prompts at once
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stop": ["<bigmodel>"],
-        "include_stop_str_in_output": True,
-        "n": 1,                    # generate 1 completion per prompt
-    }
+        url = f"http://localhost:{port}/v1/completions"
+        payload = {
+            "model": model,
+            "prompt": prompts,         # pass the entire list of prompts at once
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stop": ["<bigmodel>"],
+            "include_stop_str_in_output": True,
+            "n": 1,                    # generate 1 completion per prompt
+        }
 
-    start_time = time.time()
-    resp = requests.post(url, json=payload)
-    resp.raise_for_status()
-    end_time = time.time()
+        start_time = time.time()
+        resp = requests.post(url, json=payload)
+        resp.raise_for_status()
+        end_time = time.time()
 
-    resp_json = resp.json()
+        resp_json = resp.json()
 
-    # The 'choices' key in vLLM is typically a flat list of size=len(prompts), each with a "text".
-    # We have to parse them carefully to associate each choice with the correct prompt index.
-    # By default, the OpenAI-compatible /v1/completions returns one choice per prompt in order.
-    # So resp_json["choices"][i] corresponds to prompts[i].
-    choices = resp_json["choices"]
+        # The 'choices' key in vLLM is typically a flat list of size=len(prompts), each with a "text".
+        # We have to parse them carefully to associate each choice with the correct prompt index.
+        # By default, the OpenAI-compatible /v1/completions returns one choice per prompt in order.
+        # So resp_json["choices"][i] corresponds to prompts[i].
+        choices = resp_json["choices"]
 
-    # Build a list of response dicts, each containing exactly what a normal single-call would have returned.
-    # For consistency with your single-call usage, we mimic the structure:
-    # Each item will have the structure of {"choices": [ { "text": ..., ... } ]}
-    results = []
-    for i, choice in enumerate(choices):
-        results.append({
-            "choices": [choice]
-        })
+        # Build a list of response dicts, each containing exactly what a normal single-call would have returned.
+        # For consistency with your single-call usage, we mimic the structure:
+        # Each item will have the structure of {"choices": [ { "text": ..., ... } ]}
+        results = []
+        for i, choice in enumerate(choices):
+            results.append({
+                "choices": [choice]
+            })
 
-    total_latency = end_time - start_time
-    avg_latency = total_latency / max(1, len(prompts))
+        total_latency = end_time - start_time
+        avg_latency = total_latency / max(1, len(prompts))
 
-    return results, avg_latency
+        return results, avg_latency
+    except:
+        return None, None
 
 def batched_generate_text_with_tokens_vllm(
     prompts: List[str], 
@@ -148,43 +173,46 @@ def batched_generate_text_with_tokens_vllm(
     """
     Same as batched_generate_text_vllm, but also returns list of tokens for each completion.
     """
-    if requests is None:
-        import requests as _requests
-        requests = _requests
+    try:
+        if requests is None:
+            import requests as _requests
+            requests = _requests
 
-    url = f"http://localhost:{port}/v1/completions"
-    payload = {
-        "model": model,
-        "prompt": prompts,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stop": ["<bigmodel>"],
-        "include_stop_str_in_output": True,
-        "logprobs": logprobs,
-        "n": 1,
-    }
+        url = f"http://localhost:{port}/v1/completions"
+        payload = {
+            "model": model,
+            "prompt": prompts,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stop": ["<bigmodel>"],
+            "include_stop_str_in_output": True,
+            "logprobs": logprobs,
+            "n": 1,
+        }
 
-    start_time = time.time()
-    resp = requests.post(url, json=payload)
-    resp.raise_for_status()
-    end_time = time.time()
+        start_time = time.time()
+        resp = requests.post(url, json=payload)
+        resp.raise_for_status()
+        end_time = time.time()
 
-    resp_json = resp.json()
-    choices = resp_json["choices"]
+        resp_json = resp.json()
+        choices = resp_json["choices"]
 
-    results = []
-    token_lists = []
+        results = []
+        token_lists = []
 
-    for choice in choices:
-        results.append({
-            "choices": [choice]
-        })
-        token_info = choice.get("logprobs", {})
-        tokens = token_info.get("tokens", [])
-        token_lists.append(tokens)
+        for choice in choices:
+            results.append({
+                "choices": [choice]
+            })
+            token_info = choice.get("logprobs", {})
+            tokens = token_info.get("tokens", [])
+            token_lists.append(tokens)
 
-    avg_latency = (end_time - start_time) / max(1, len(prompts))
-    return results, token_lists, avg_latency
+        avg_latency = (end_time - start_time) / max(1, len(prompts))
+        return results, token_lists, avg_latency
+    except:
+        return None, None, None
 
 def batched_eval_logprob_vllm(
     text_batch: List[str],
@@ -443,7 +471,8 @@ def speculative_reason():
             test_logging=test_logging,
             lbound=data.get("lbound", service_args.lbound),
             max_iterations=data.get("max_iterations", service_args.max_iterations),
-            sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
+            sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
+            token_counter=approximate_token_count
         )
 
     else:
@@ -521,7 +550,9 @@ def main():
     # Determine which models to launch based on mode
     need_big_model = not service_args.small_model_only
     need_small_model = not service_args.big_model_only
-
+    
+    # Load tokenizer
+    load_big_model_tokenizer(service_args.big_model)
 
     # 1) Check if the big model is needed and launch if necessary
     if need_big_model:
