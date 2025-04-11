@@ -44,11 +44,16 @@ def run_smallmodel_flow(
     # Scaling is 0 indexed, dont ask me why lol
     for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
-            # Basic prompt
-            if "｜" not in question:
-                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
+            if "SpecR" in small_model:
+                prompt = (
+                    f"<｜begin▁of▁sentence｜><｜User｜>{question}\n"
+                    f"{terminating_string} "
+                    f"{bigmodel_str}"
+                    f"<｜Assistant｜>\n"
+                    f"{model_think_prefix}"
+                )
             else:
-                prompt = f"{question}{terminating_string}\n{model_think_prefix}"
+                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}\n<｜Assistant｜>\n{model_think_prefix}"
 
         if test_logging:
             print("Sending request to small model")

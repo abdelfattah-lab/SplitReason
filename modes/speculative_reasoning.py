@@ -51,13 +51,14 @@ def run_speculative_reasoning_flow(
 
     model_think_prefix = "<think>\n"
     model_think_suffix = "</think>"
-    if "｜" not in question:
-        base_prompt = (
-            f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string} You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important.<｜Assistant｜>\n{model_think_prefix}"
-        )
-    else:
-        base_prompt = f"{question}{terminating_string}\n{model_think_prefix}"
-
+    bigmodel_str = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
+    base_prompt = (
+        f"<｜begin▁of▁sentence｜><｜User｜>{question}\n"
+        f"{terminating_string} "
+        f"{bigmodel_str}"
+        f"<｜Assistant｜>\n"
+        f"{model_think_prefix}"
+    )
     current_text = base_prompt
     # keep this small but not too small, it becomes the 'batch size' for batch small model generation on stop command
     numtok_bigmodel = 32
@@ -100,7 +101,7 @@ def run_speculative_reasoning_flow(
                 # and return the current text
                 # print("Bigmodel invoked post <bigmodel>")
                 generation_resps, generation_tokens, latency = batched_generate_text_with_tokens_vllm(
-                    prompts=[current_text.replace("<bigmodel>", "").replace("</bigmodel>", "")],
+                    prompts=[current_text.replace("<bigmodel>", "").replace("</bigmodel>", "").replace(bigmodel_str, "")],
                     port=big_model_port,
                     temperature=temperature,
                     max_tokens=numtok_bigmodel,

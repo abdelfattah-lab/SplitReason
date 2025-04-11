@@ -292,7 +292,7 @@ def process_batch_in_parallel(batch, top_percent=0.4, llm_top_k=None):
 
 ds = load_dataset("open-r1/OpenR1-Math-220k", "default")
 
-ds_small = ds["train"].select(range(25000))
+ds_small = ds["train"].select(range(55000))
 
 processed_indices = set()
 if os.path.exists("processed_ids.txt"):

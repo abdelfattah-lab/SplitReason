@@ -53,64 +53,70 @@ def main():
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_wgrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T16-10-38.564770.jsonl"
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T20-10-31.019388.jsonl"
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T22-11-36.603514.jsonl"
-    json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_15bonly/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-11T11-03-26.407775.jsonl"
-    with open(json_file, "r") as f:
-        lines = f.readlines()
-        data = [json.loads(line) for line in lines]
+    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_15bonly/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-11T11-03-26.407775.jsonl"
+    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/old_sft_grpo_15bonly/meta-llama__Llama-2-7b-chat-hf"
+    # list all files with prefix samples_
+    print(f"Investigating json files in {json_folder}")
+    json_files = [f for f in os.listdir(json_folder) if f.startswith("samples_") and f.endswith(".jsonl")]
+    for json_file in json_files:
+        json_file = os.path.join(json_folder, json_file)
+        with open(json_file, "r") as f:
+            lines = f.readlines()
+            data = [json.loads(line) for line in lines]
 
-    # Create a 5×6 figure (to accommodate 30 items)
-    fig, axs = plt.subplots(5, 6, figsize=(18, 10))
-    axs = axs.flatten()  # Flatten to iterate easily
+        # Create a 5×6 figure (to accommodate 30 items)
+        fig, axs = plt.subplots(5, 6, figsize=(18, 10))
+        axs = axs.flatten()  # Flatten to iterate easily
 
-    coverage_list = []
-    # 2) Iterate over each data item (up to 30)
-    for i, item in enumerate(data):
-        if i >= 30:
-            break  # just in case there are more than 30 items
+        coverage_list = []
+        # 2) Iterate over each data item (up to 30)
+        for i, item in enumerate(data):
+            if i >= 30:
+                break  # just in case there are more than 30 items
 
-        ax = axs[i]
+            ax = axs[i]
 
-        # Example: assume the text of interest is in data[i]['resps'][0][0]
-        # Adjust indexing if your data is different
-        text = item['resps'][0][0] if item['resps'] else ""
+            # Example: assume the text of interest is in data[i]['resps'][0][0]
+            # Adjust indexing if your data is different
+            text = item['resps'][0][0] if item['resps'] else ""
 
-        # Skip if no text
-        if not text:
-            ax.set_title(f"Example {i} (no text)")
-            ax.set_xticks([])
+            # Skip if no text
+            if not text:
+                ax.set_title(f"Example {i} (no text)")
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+
+            # 3) Compute the mask
+            mask = get_bigmodel_mask(text)
+
+            if len(mask) == 0:
+                ax.set_title(f"Example {i} (empty mask)")
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+
+            # 4) Prepare x and y for step plot
+            x = [k / len(mask) for k in range(len(mask))]
+            y = mask  # 0/1 list
+
+            # 5) Plot
+            ax.step(x, y, where='post')
+            ax.set_ylim(-0.1, 1.1)  # only 0 or 1
+            ax.set_xlim(0, 1)
             ax.set_yticks([])
-            continue
 
-        # 3) Compute the mask
-        mask = get_bigmodel_mask(text)
+            # 6) Add percentage label to the title
+            coverage = 100.0 * sum(mask) / len(mask)
+            coverage_list.append(coverage)
+            ax.set_title(f"Example {i} ({coverage:.1f}% covered)")
 
-        if len(mask) == 0:
-            ax.set_title(f"Example {i} (empty mask)")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            continue
-
-        # 4) Prepare x and y for step plot
-        x = [k / len(mask) for k in range(len(mask))]
-        y = mask  # 0/1 list
-
-        # 5) Plot
-        ax.step(x, y, where='post')
-        ax.set_ylim(-0.1, 1.1)  # only 0 or 1
-        ax.set_xlim(0, 1)
-        ax.set_yticks([])
-
-        # 6) Add percentage label to the title
-        coverage = 100.0 * sum(mask) / len(mask)
-        coverage_list.append(coverage)
-        ax.set_title(f"Example {i} ({coverage:.1f}% covered)")
-
-    # Layout and save
-    plt.tight_layout()
-    plt.savefig("aime24_behavior.pdf")
-    plt.clf()
-    plt.close()
-    print(f"Average coverage: {sum(coverage_list) / len(coverage_list):.2f}% \t std: {np.std(coverage_list):.2f}% \t min: {min(coverage_list):.2f}%\t max: {max(coverage_list):.2f}%")
+        # Layout and save
+        plt.tight_layout()
+        plt.savefig("aime24_behavior.pdf")
+        plt.clf()
+        plt.close()
+        print(f"Average coverage: {sum(coverage_list) / len(coverage_list):.2f}% \t std: {np.std(coverage_list):.2f}% \t min: {min(coverage_list):.2f}%\t max: {max(coverage_list):.2f}%")
 
 if __name__ == "__main__":
     main()
