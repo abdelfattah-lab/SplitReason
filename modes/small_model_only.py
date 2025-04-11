@@ -30,7 +30,6 @@ def run_smallmodel_flow(
 
     if test_logging:
         draft_logs = "small_model_draft_logs"
-        import os
         if not os.path.exists(draft_logs):
             os.makedirs(draft_logs)
 
@@ -42,6 +41,8 @@ def run_smallmodel_flow(
 
         subfolder_path = f"{draft_logs}/{timestamp}"
         os.makedirs(subfolder_path, exist_ok=True)
+
+    bigmodel_str = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
 
     start_time = time.time()
     # Scaling is 0 indexed, dont ask me why lol
