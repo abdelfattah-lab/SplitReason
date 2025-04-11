@@ -81,6 +81,7 @@ def run_speculative_reasoning_flow(
             temperature=temperature,
             max_tokens=16000 - curr_token_count,
             model=small_model,
+            is_bigmodel_halting=True,
             requests=requests
             )
         if generation_resps is None:

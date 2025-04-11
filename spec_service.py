@@ -104,6 +104,7 @@ def batched_generate_text_vllm(
     temperature: float = 0.6, 
     max_tokens: int = 128, 
     model: str = "my-model", 
+    is_bigmodel_halting=False,
     requests=None
 ) -> Tuple[List[dict], float]:
     """
@@ -122,15 +123,24 @@ def batched_generate_text_vllm(
             requests = _requests
 
         url = f"http://localhost:{port}/v1/completions"
-        payload = {
-            "model": model,
-            "prompt": prompts,         # pass the entire list of prompts at once
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stop": ["<bigmodel>"],
-            "include_stop_str_in_output": True,
-            "n": 1,                    # generate 1 completion per prompt
-        }
+        if is_bigmodel_halting:
+            payload = {
+                "model": model,
+                "prompt": prompts,         # pass the entire list of prompts at once
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stop": ["<bigmodel>"],
+                "include_stop_str_in_output": True,
+                "n": 1,                    # generate 1 completion per prompt
+            }
+        else:
+            payload = {
+                "model": model,
+                "prompt": prompts,         # pass the entire list of prompts at once
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "n": 1,                    # generate 1 completion per prompt
+            }
 
         start_time = time.time()
         resp = requests.post(url, json=payload)
@@ -168,6 +178,7 @@ def batched_generate_text_with_tokens_vllm(
     max_tokens: int = 128, 
     model: str = "my-model", 
     requests=None,
+    is_bigmodel_halting=False,
     logprobs: int = 1
 ) -> Tuple[List[dict], List[List[str]], float]:
     """
@@ -179,16 +190,26 @@ def batched_generate_text_with_tokens_vllm(
             requests = _requests
 
         url = f"http://localhost:{port}/v1/completions"
-        payload = {
-            "model": model,
-            "prompt": prompts,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stop": ["<bigmodel>"],
-            "include_stop_str_in_output": True,
-            "logprobs": logprobs,
-            "n": 1,
-        }
+        if is_bigmodel_halting:
+            payload = {
+                "model": model,
+                "prompt": prompts,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stop": ["<bigmodel>"],
+                "include_stop_str_in_output": True,
+                "logprobs": logprobs,
+                "n": 1,
+            }
+        else:
+            payload = {
+                "model": model,
+                "prompt": prompts,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "logprobs": logprobs,
+                "n": 1,
+            }
 
         start_time = time.time()
         resp = requests.post(url, json=payload)
@@ -221,6 +242,7 @@ def batched_eval_logprob_vllm(
     requests,
     temperature: float = 0.0,
     max_tokens: int = 0,
+    is_bigmodel_halting=False,
     logprobs: int = 1
 ) -> Tuple[List[float], List[str], float, int]:
     """
@@ -234,17 +256,26 @@ def batched_eval_logprob_vllm(
     - num_requests: length of text_batch (the number of prompts in the batch).
     """
     url = f"http://localhost:{big_model_port}/v1/completions"
-
-    payload = {
-        "model": big_model,
-        "prompt": text_batch,
-        "max_tokens": max_tokens,   # typically 0 or 1 if purely evaluating logprobs
-        "temperature": temperature,
-        "logprobs": logprobs,
-        "stop": ["<bigmodel>"],
-        "include_stop_str_in_output": True,
-        "n": 1,                     # 1 completion per prompt
-    }
+    if is_bigmodel_halting:
+        payload = {
+            "model": big_model,
+            "prompt": text_batch,
+            "max_tokens": max_tokens,   # typically 0 or 1 if purely evaluating logprobs
+            "temperature": temperature,
+            "logprobs": logprobs,
+            "stop": ["<bigmodel>"],
+            "include_stop_str_in_output": True,
+            "n": 1,                     # 1 completion per prompt
+        }
+    else:
+        payload = {
+            "model": big_model,
+            "prompt": text_batch,
+            "max_tokens": max_tokens,   # typically 0 or 1 if purely evaluating logprobs
+            "temperature": temperature,
+            "logprobs": logprobs,
+            "n": 1,                     # 1 completion per prompt
+        }
 
     start_time = time.time()
     resp = requests.post(url, json=payload)
@@ -282,19 +313,28 @@ def batched_eval_logprob_vllm(
 
     return scores, gentexts, avg_latency, num_requests
     
-def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model"):
+def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", 
+    is_bigmodel_halting=False,):
     """
     A direct call to the vLLM HTTP server's /v1/completions endpoint.
     """
     url = f"http://localhost:{port}/v1/completions"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stop": ["<bigmodel>"],
-        "include_stop_str_in_output": True,
-    }
+    if is_bigmodel_halting:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stop": ["<bigmodel>"],
+            "include_stop_str_in_output": True,
+        }
+    else:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
     start_time = time.time()
     resp = requests.post(url, json=payload)
     end_time = time.time()
