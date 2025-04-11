@@ -98,7 +98,7 @@ def coverage_reward(content: str) -> float:
     - 0 <= ratio < 0.15: linearly 0 to +1
     - 0.15 <= ratio <= 1.0: linearly from +1 down to -1
     """
-    increase_till = 0.2
+    increase_till = 0.25
     try:
         total_chars = len(content)
         if total_chars == 0:

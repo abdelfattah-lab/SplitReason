@@ -15,6 +15,7 @@ def run_bigmodel_flow(
     temperature=0.7,
     sequential_scale=0,
     test_logging: bool = False,
+    token_counter=None,
 ):
     """
     A baseline 'placeholder' flow: we just send a single request to the

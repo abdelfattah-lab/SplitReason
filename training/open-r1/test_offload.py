@@ -32,7 +32,8 @@ def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_9k_v2"
 # Average coverage: 2.10%          std: 4.73%      min: 0.00%      max: 15.34%
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner"
-model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_9k_v3"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_9k_v3"
+model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT"
 
 # Load tokenizer for formatting
 tokenizer = AutoTokenizer.from_pretrained(model_name)

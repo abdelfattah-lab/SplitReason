@@ -15,6 +15,7 @@ def run_smallmodel_flow(
     temperature=0.7,
     test_logging: bool = False,
     sequential_scale=0,
+    token_counter=None
 ):
     """
     A baseline 'placeholder' flow: we just send a single request to the

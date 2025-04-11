@@ -376,7 +376,8 @@ def speculative_reason():
             max_tokens=max_tokens,
             test_logging=test_logging,
             temperature=temperature,
-            sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
+            sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
+            token_counter=approximate_token_count
         )
     elif data.get("big_model_only", False):
         final_reply, usage_data = run_bigmodel_flow(
@@ -388,7 +389,8 @@ def speculative_reason():
             max_tokens=max_tokens,
             terminating_string=terminating_string,
             temperature=temperature,
-            sequential_scale=data.get("sequential_scale", service_args.sequential_scale)
+            sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
+            token_counter=approximate_token_count
         )
     elif data.get("logprob_subselect", False):
         final_reply, usage_data = run_logprob_subselect_flow(

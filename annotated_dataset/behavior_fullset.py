@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datasets import load_from_disk
 
-def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
+def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel>"):
     mask = [0] * len(text)
     start_index = 0
 

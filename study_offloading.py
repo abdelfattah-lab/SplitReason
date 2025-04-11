@@ -49,7 +49,11 @@ def main():
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T11-45-51.441609.jsonl"
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T12-05-33.361131.jsonl"
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T12-41-03.279610.jsonl"
-    json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T13-22-13.516233.jsonl"
+    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T13-22-13.516233.jsonl"
+    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_wgrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T16-10-38.564770.jsonl"
+    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T20-10-31.019388.jsonl"
+    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T22-11-36.603514.jsonl"
+    json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_15bonly/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-11T11-03-26.407775.jsonl"
     with open(json_file, "r") as f:
         lines = f.readlines()
         data = [json.loads(line) for line in lines]
