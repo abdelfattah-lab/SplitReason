@@ -3,6 +3,8 @@
 from pprint import pprint
 import os
 import datetime
+import time 
+import uuid
 
 
 def run_smallmodel_flow(
@@ -41,6 +43,7 @@ def run_smallmodel_flow(
         subfolder_path = f"{draft_logs}/{timestamp}"
         os.makedirs(subfolder_path, exist_ok=True)
 
+    start_time = time.time()
     # Scaling is 0 indexed, dont ask me why lol
     for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
@@ -81,5 +84,14 @@ def run_smallmodel_flow(
         if sequential_scale > 0 and sequential_iter < sequential_scale:
             # Add a '\nWait' to the final_reply_small and over-write prompt for the next iteration
             prompt = f"{prompt}{final_reply_small}\nWait"  
+    total_time = time.time() - start_time
+    total_tokens = token_counter(final_reply_small) if token_counter else len(final_reply_small.split())
+    time_per_tok = total_time / total_tokens if total_tokens > 0 else 0
+    uuid_ = str(uuid.uuid4())
+    if not os.path.exists("small_model_benchmarks.csv"):
+        with open("small_model_benchmarks.csv", "w") as f:
+            f.write("uuid,small_model,sequential_scale,total_tokens,total_time,time_per_tok\n")
+    with open("small_model_benchmarks.csv", "a") as f:
+        f.write(f"{uuid_},{small_model},{sequential_scale},{total_tokens},{total_time},{time_per_tok}\n")
 
     return final_reply_small, usage_data

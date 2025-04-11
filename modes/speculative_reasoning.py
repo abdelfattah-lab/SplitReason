@@ -4,6 +4,7 @@ import datetime
 import re
 import time
 import traceback
+import uuid
 
 def write_op():
     with open("track_op.txt", "a") as f:
@@ -66,6 +67,7 @@ def run_speculative_reasoning_flow(
     numsteps_smallmodel = 8
     finish_reason = 'uninitialized'
 
+    start_time = time.time()
     while True:
         curr_token_count = token_counter(current_text)
         if curr_token_count > 16000:
@@ -160,5 +162,15 @@ def run_speculative_reasoning_flow(
                 # bigmodel job is NOT DONE. add the generation_resps text to current_text
                 else:
                     current_text += generation_resps[0]['choices'][0]['text']
+    total_time = time.time() - start_time
+    total_tokens = token_counter(current_text)
+    time_per_tok = total_time / total_tokens
+    uuid_ = str(uuid.uuid4())
+    # Save uuid,small_model,numtok_bigmodel,numsteps_smallmodel,total_tokens,total_time,time_per_tok to a file called "speculative_reasoning_benchmarks.csv"
+    if not os.path.exists("speculative_reasoning_benchmarks.csv"):
+        with open("speculative_reasoning_benchmarks.csv", "w") as f:
+            f.write("uuid,small_model,numtok_bigmodel,numsteps_smallmodel,total_tokens,total_time,time_per_tok\n")
+    with open("speculative_reasoning_benchmarks.csv", "a") as f:
+        f.write(f"{uuid_},{small_model},{numtok_bigmodel},{numsteps_smallmodel},{total_tokens},{total_time},{time_per_tok}\n")
     write_op()
     return current_text, usage_data

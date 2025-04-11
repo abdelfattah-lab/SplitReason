@@ -319,7 +319,7 @@ else:
     partial_dataset = None
     all_results = []
 
-num_parallel = 100
+num_parallel = 50
 chunk_counter = 0
 
 for start_idx in tqdm(range(0, len(ds_small), num_parallel), desc="Processing batches"):
