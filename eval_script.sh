@@ -12,6 +12,21 @@ export CUDA_LAUNCH_BLOCKING=1
 export OPENAI_API_KEY=sk-f1NsPRPJmnjiOWU_A8--7Q48QK4q4nETb0mAYTr51iT3BlbkFJph5v94eagNhCriCnJw-FDtdQTJNIxsBYQUbMHp_IsA
 
 
+### Spe
+
+
+#### Speculative Decoding
+
+python -m lm_eval --model vllm_speculative --model_args "service_script_path=./../spec_service.py,pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=1|2,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=0,max_tokens=16384,spec_decode=True"  \
+     --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/spec_decode --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
+
+#### Speculative Decoding through big_model only
+
+python -m lm_eval --model vllm_speculative --model_args "service_script_path=./../spec_service.py,pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=1|2,max_tokens=16384,big_model_only=True"  \
+     --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/spec_decode --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
+
+
+
 ##### RUN THIS BEFORE STARTING NEW JOBS #####
 # fuser -k -9 /dev/nvidia*
 ##### RUN THIS BEFORE STARTING NEW JOBS #####
@@ -19,6 +34,10 @@ export OPENAI_API_KEY=sk-f1NsPRPJmnjiOWU_A8--7Q48QK4q4nETb0mAYTr51iT3BlbkFJph5v9
 # ###### Basic testing sample ######
 # python test_spec.py --test_logging --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --logprob_subselect --sgen 512 --stok 16 --sdecay 2 --ltok 32
 # python test_spec.py --test_logging --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --big_model_gpus 1|2 --small_model_gpus 0 --small_model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --random_switch --switch_ratio 4 --switch_chunk 32
+
+
+python -m lm_eval --model vllm_speculative --model_args "service_script_path=./../spec_service.py,pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=1|2,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=0,max_tokens=16384,switch_chunk=1,random_switch=True,switch_ratio=128"  \
+     --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/rswitch_sw_8_sc_128_v0 --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
 
 
 #  8-switch 128 tok
@@ -122,7 +141,7 @@ python -m lm_eval --model vllm_speculative --model_args "service_script_path=./s
 
 
 # python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B,big_model_port=8000,big_model_gpus=1,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=0,max_tokens=16384,stok=32,sgen=8,sdecay=2,ltok=512,lbound=8,logprob_subselect=True"   --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/lprob_14b_1_5b_512_64_2_32_8 --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
-
+python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,pretrained=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_port=8000,big_model_gpus=0|1,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,small_model_port=8001,small_model_gpus=2,max_tokens=16384,stok=32,sgen=8,sdecay=2,ltok=512,lbound=8,logprob_subselect=True"   --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/random_switch --random_switch --switch_ratio 32 --switch_chunk 1 --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
 
 # ###### TESTING WITH Q7B _ Q1.5B ############ TESTING WITH Q7B _ Q1.5B ############ TESTING WITH Q7B _ Q1.5B ############ TESTING WITH Q7B _ Q1.5B ############ TESTING WITH Q7B _ Q1.5B ######
 # # # LogProb Subselect Qwen1.5 512_16_2_32_2

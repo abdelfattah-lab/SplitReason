@@ -17,6 +17,7 @@ from modes.logprob_subselect import run_logprob_subselect_flow
 from modes.small_model_only import run_smallmodel_flow
 from modes.big_model_only import run_bigmodel_flow
 from modes.random_switch_flow import run_random_switch_flow
+from modes.spec_decode import run_speculative_decode_flow
 
 app = Flask(__name__)
 
@@ -42,6 +43,29 @@ def wait_for_server(url, timeout=600.0):
             pass
         time.sleep(1)
     return False
+
+def launch_big_model_sglang(big_model, port, gpu_ids):
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = gpu_ids
+    tp_size = len(gpu_ids.split(","))
+    
+    cmd = [
+        "python", "-m", "sglang.launch_server",
+        "--model", big_model,
+        "--port", str(port),
+        "--tensor-parallel-size", str(tp_size),
+        "--max-total-tokens", "32768",
+        "--host", "127.0.0.1",
+        # "--enable-prefix-caching",
+        "--dtype", "half",  # Equivalent to FP16 precision
+        # "--disable-log-requests",
+        "--trust-remote-code",
+        # "--speculative-algorithm", "NEXTN",
+        # "--speculative-draft-model-path", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    ]
+    
+    print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids} with SGLang")
+    return subprocess.Popen(cmd, env=env)
 
 def launch_big_model_vllm(big_model, port, gpu_ids):
     env = os.environ.copy()
@@ -207,8 +231,61 @@ def batched_eval_logprob_vllm(
     num_requests = len(text_batch)
 
     return scores, gentexts, avg_latency, num_requests
+
+def generate_text_sglang(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", stop=None, logprobs=None, echo=False):
+    """
+    Call to the SGLang server's /generate endpoint instead of /v1/completions.
+    Returns full log probabilities for all tokens including input tokens.
+    """
+    url = f"http://localhost:{port}/generate"
     
-def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", stop=None):
+    # Build the payload for the /generate endpoint
+    payload = {
+        "text": prompt,  # SGLang uses 'text' instead of 'prompt'
+        "temperature": temperature,
+        "return_logprob": True,  # Always return log probabilities
+        "top_logprobs_num": 1, # Return the top 5 only.
+        "sampling_params": {
+            "max_new_tokens": max_tokens,  # SGLang uses 'max_new_tokens' instead of 'max_tokens'
+        }
+        # "logprob_start_len": 0,  # Start from the beginning of the text
+    }
+    
+    # Add stop sequence if provided
+    if stop:
+        payload["stop"] = stop
+
+    start_time = time.time()
+    resp = requests.post(url, json=payload)
+    # import pdb; pdb.set_trace()
+    resp.raise_for_status()
+    end_time = time.time()
+    latency = end_time - start_time
+    # Format response to match the expected structure
+    response_json = resp.json()
+    
+    # Restructure to match the format expected by the rest of the code
+    formatted_response = {
+        "choices": [
+            {
+                "text": response_json.get("text", ""),
+                "logprobs": {
+                    "token_logprobs": response_json.get("logprobs", {}).get("token_logprobs", []),
+                    "tokens": response_json.get("logprobs", {}).get("tokens", []),
+                    "text_offset": response_json.get("logprobs", {}).get("text_offset", [])
+                }
+            }
+        ],
+        "usage": {
+            "prompt_tokens": response_json.get("usage", {}).get("prompt_tokens", 0),
+            "completion_tokens": response_json.get("usage", {}).get("completion_tokens", 0),
+            "total_tokens": response_json.get("usage", {}).get("total_tokens", 0)
+        }
+    }
+    
+    return formatted_response, latency
+
+def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", stop=None, logprobs=None, echo=False):
     """
     A direct call to the vLLM HTTP server's /v1/completions endpoint.
     Added support for stop sequences.
@@ -218,7 +295,9 @@ def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model
         "model": model,
         "prompt": prompt,
         "max_tokens": max_tokens,
-        "temperature": temperature
+        "temperature": temperature,
+        "logprobs": logprobs,
+        "echo": echo,
     }
     # Add stop sequence if provided
     if stop:
@@ -226,6 +305,8 @@ def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model
         
     start_time = time.time()
     resp = requests.post(url, json=payload)
+    # Print the response
+    print(resp.json())
     end_time = time.time()
     resp.raise_for_status()
     latency = end_time - start_time
@@ -417,6 +498,23 @@ def speculative_reason():
             switch_ratio=switch_ratio,
             switch_chunk=switch_chunk,
             requests=requests
+        )
+    elif data.get("spec_decode", False):
+        final_reply, usage_data = run_speculative_decode_flow(
+            question=question,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            small_model=service_args.small_model,
+            small_model_port=service_args.small_model_port,
+            generate_text_vllm=generate_text_vllm,
+            generate_text_sglang=generate_text_sglang,
+            test_logging=test_logging,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            terminating_string=terminating_string,
+            draft_tokens=data.get("draft_tokens", service_args.draft_tokens),
+            max_iterations=data.get("max_iterations", service_args.spec_decode_max_iterations),
+            gamma=data.get("gamma", service_args.gamma)
         )
     else:
         return jsonify({"error": "Invalid mode specified in JSON payload"}), 400
@@ -737,6 +835,7 @@ def parse_args():
     parser.add_argument("--small_model_only", action="store_true")
     parser.add_argument("--think_only", action="store_true")
     parser.add_argument("--think_summarize", action="store_true")
+    parser.add_argument("--spec_decode", action="store_true")
     ### End Of Modes, only 1 can be true ###
     parser.add_argument("--test_logging", action="store_true")
     ### Think Only and Think Summarize Args ###
@@ -767,6 +866,14 @@ def parse_args():
     parser.add_argument("--drafting_n", type=int, default=1)
     parser.add_argument("--small_first", action="store_true")
     ### End Of Spec Rewrite Args ###
+    ### Speculative Decoding Args ###
+    parser.add_argument("--draft_tokens", type=int, default=16, 
+                       help="Number of tokens to generate in each draft step for speculative decoding")
+    parser.add_argument("--spec_decode_max_iterations", type=int, default=50,
+                       help="Maximum number of iterations for speculative decoding")
+    parser.add_argument("--gamma", type=float, default=0.3,
+                       help="Acceptance rate threshold for speculative decoding")
+    ### End Of Speculative Decoding Args ###
     parser.add_argument("--max_tokens", type=int, default=16384)
     parser.add_argument("--terminating_string", type=str, default=" \n Put your final answer within \\boxed{}.")
     parser.add_argument("--terminate_on_exit", action="store_true",
@@ -789,7 +896,7 @@ def main():
     if wait_for_server(f"http://localhost:{service_args.big_model_port}/ping", timeout=5):
         print("[Service] Big model is already up.")
     else:
-        big_model_proc = launch_big_model_vllm(service_args.big_model,
+        big_model_proc = launch_big_model_sglang(service_args.big_model,
                                                service_args.big_model_port,
                                                service_args.big_model_gpus)
         print("[Service] Waiting for big model server to be ready ...")

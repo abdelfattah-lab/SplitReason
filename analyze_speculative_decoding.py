@@ -27,10 +27,10 @@ class Config:
     large_model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
     
     # Speculative decoding parameters
-    gamma = 0.5  # Acceptance threshold
+    gamma = 1  # Acceptance threshold
     max_new_tokens = 16384  # Maximum number of tokens to generate
     max_length = 16384  # Maximum context length
-    spec_len = 16  # Number of tokens to speculate at once
+    spec_len = 32  # Number of tokens to speculate at once
     
     # Dataset
     dataset_name = "simplescaling/aime24_nofigures"  # AIME dataset from HuggingFace
