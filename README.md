@@ -35,7 +35,7 @@ cp -r lm_eval_files/openai lm-evaluation-harness/lm_eval/tasks/gpqa
 
 # Install package
 cd lm-evaluation-harness
-python -m pip install -e .[math,vllm]
+python -m pip install -e ".[math,vllm]"
 
 cd ./../
 ```
