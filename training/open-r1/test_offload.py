@@ -33,25 +33,34 @@ def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
 # Average coverage: 2.10%          std: 4.73%      min: 0.00%      max: 15.34%
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner"
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_9k_v3"
-model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT"
-
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT_GRPO"
+    # "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner",
+    # "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner",
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT_14k"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT_GRPO_14k_v3"
+# dataset = load_dataset("open-r1/OpenR1-Math-220k", split="train")
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpeculativeReasoner"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SelfCompress_SFT"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SelfCompress_SFT_GRPO_INDUCETEST"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpeculativeReasoner"
+model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner"
 # Load tokenizer for formatting
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-
+import pdb; pdb.set_trace()
 # Load dataset
-dataset = load_dataset("open-r1/OpenR1-Math-220k", split="train")
-
+dataset = load_dataset("akhauriyash/OpenR1_Math_SpeculativeReasoning", split="train")
+# dataset = load_dataset("akhauriyash/OpenR1_Math_SelfCompress", split="train")
 # Set up generation pipeline
 device = 0 if torch.cuda.is_available() else -1
 
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
-    # "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner",
-    # "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpecReasoner",
     device_map="auto",
     torch_dtype=torch.bfloat16,
     attn_implementation="flash_attention_2",
 )
+import pdb; pdb.set_trace()
 generator = pipeline("text-generation", model=model, tokenizer=tokenizer, torch_dtype=torch.bfloat16)
 
 # Helper to format messages using chat template
@@ -86,7 +95,7 @@ for i in tqdm(range(10)):
 
     offload_percentage = 100.0 * offload_chars / length
     offp.append(offload_percentage)
-    print(f"Question ID: {i}, <bigmodel> occurrences: {count}")
+    print(f"Question ID: {i}, <bigmodel> occurrences: {count}, offload percentage: {offload_percentage:.2f}%")
 
 # avg
 coverage_list = offp

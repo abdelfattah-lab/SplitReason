@@ -61,6 +61,8 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
     tp_size = len(gpu_ids.split(","))
 
+        # "--max-model-len", "16384",
+        # "--max-num-batched-tokens", "32768",
     cmd = [
         "vllm", "serve",
         big_model,
@@ -68,9 +70,7 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
-        # "--max-model-len", "16384",
         "--uvicorn-log-level=warning",
-        # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
         "--enable-chunked-prefill"
     ]
@@ -82,6 +82,8 @@ def launch_small_model(model_name, port, gpu_ids):
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
     tp_size = len(gpu_ids.split(","))
 
+        # "--max-num-batched-tokens", "32768",
+        # "--max-model-len", "16384",
     cmd = [
         "vllm", "serve",
         model_name,
@@ -89,9 +91,7 @@ def launch_small_model(model_name, port, gpu_ids):
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
-        # "--max-model-len", "16384",
         "--uvicorn-log-level=warning",
-        # "--max-num-batched-tokens", "32768",
         "--enable_prefix_caching",
         "--enable-chunked-prefill"
     ]
@@ -574,7 +574,7 @@ def parse_args():
     parser.add_argument("--small_first", action="store_true")
     ### End Of Spec Rewrite Args ###
     parser.add_argument("--max_tokens", type=int, default=16384)
-    parser.add_argument("--terminating_string", type=str, default=" \n Put your final answer within \\boxed{}.")
+    parser.add_argument("--terminating_string", type=str, default="\n Put your final answer within \\boxed{}.")
     parser.add_argument("--terminate_on_exit", action="store_true",
                         help="If True, will shut down vLLM servers on ctrl-c or exit.")
     parser.add_argument("--port", type=int, default=5000,

@@ -19,6 +19,7 @@ import asyncio
 import json
 import math
 import re
+from typing import List, Optional
 from functools import partial, update_wrapper
 from typing import Callable, Dict, Optional
 
@@ -36,6 +37,30 @@ if is_e2b_available():
     load_dotenv()
 else:
     AsyncSandbox = None
+
+
+
+def _has_proper_bigmodel_nesting(text: str) -> bool:
+    """
+    Returns True iff each <bigmodel> … </bigmodel> pair is balanced and no new
+    <bigmodel> starts before the previous one is closed.
+    """
+    pos = 0
+    open_tag  = "<bigmodel>"
+    close_tag = "</bigmodel>"
+
+    while True:
+        open_pos = text.find(open_tag, pos)
+        if open_pos == -1:          # no more openings → success
+            return True
+        close_pos = text.find(close_tag, open_pos + len(open_tag))
+        if close_pos == -1:         # opening without closing
+            return False
+        next_open = text.find(open_tag, open_pos + len(open_tag))
+        if next_open != -1 and next_open < close_pos:
+            # another <bigmodel> appears before we closed the previous one
+            return False
+        pos = close_pos + len(close_tag)  # continue scanning after this pair
 
 
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
@@ -83,12 +108,39 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     return rewards
 
 
-def format_reward(completions, **kwargs):
-    """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""
-    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
-    completion_contents = [completion[0]["content"] for completion in completions]
-    matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
-    return [1.0 if match else 0.0 for match in matches]
+# def format_reward(completions, **kwargs):
+#     """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""
+#     pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
+#     completion_contents = [completion[0]["content"] for completion in completions]
+#     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
+#     return [1.0 if match else 0.0 for match in matches]
+
+def format_reward(
+    completions: List[List[dict[str, str]]], **kwargs
+) -> List[Optional[float]]:
+    """
+    +1 if the entire response follows the <think> / <answer> scaffold.
+    +1 extra if all <bigmodel> tags are properly paired and non‑overlapping.
+    """
+    scaffold_pat = re.compile(
+        r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$",
+        flags=re.DOTALL | re.MULTILINE,
+    )
+
+    rewards = []
+    for completion in completions:
+        content = completion[0]["content"]
+        score = 0.0
+
+        if scaffold_pat.match(content):
+            score += 1.0
+
+        if _has_proper_bigmodel_nesting(content):
+            score += 1.0
+
+        rewards.append(score)
+
+    return rewards
 
 def coverage_reward(content: str) -> float:
     """
@@ -98,7 +150,7 @@ def coverage_reward(content: str) -> float:
     - 0 <= ratio < 0.15: linearly 0 to +1
     - 0.15 <= ratio <= 1.0: linearly from +1 down to -1
     """
-    increase_till = 0.25
+    increase_till = 0.4
     try:
         total_chars = len(content)
         if total_chars == 0:
@@ -136,63 +188,43 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
     """
 
     def bigmodel_count_reward(n: int) -> float:
-        if n <= 6:
+        if n <= 8:
             return 0.5 * n
         else:
-            return 2.0 - 0.5 * (n - 4)
+            return 4.0 - 0.5 * (n - 8)
 
     rewards = []
     for completion in completions:
         text = completion[0]["content"]
         r = 0.0
+        # Max think-answer-box tag reward is 2
         if text.count("<think>\n") == 1:
-            r += 0.25
+            r += 0.5
         if text.count("\n</think>\n") == 1:
-            r += 0.25
+            r += 0.5
         if text.count("\n<answer>\n") == 1:
             r += 0.25
         if text.count("\n</answer>") == 1:
             r += 0.25
+        if text.count(r"\boxed{") > 0:
+            r += 0.5
 
         open_count = text.count("<bigmodel>")
         close_count = text.count("</bigmodel>")
-        r += bigmodel_count_reward(open_count)
-        coverage_r = coverage_reward(text)
+
+        # Max tag reward is 2
+        r += (bigmodel_count_reward(open_count)//2)
+        
+        # Max coverage reward is 2
+        coverage_r = 2*coverage_reward(text)
+        
         r += coverage_r
         # Penalty if closure not met. (no guarantees here, just trying.)
+        # Closure -may- not be met, deduct reward of 2
         if open_count != close_count:
             r -= 2
         rewards.append(r)
     return rewards
-
-
-# def tag_count_reward(completions, **kwargs) -> list[float]:
-#     """Reward function that checks if we produce the desired number of think and answer tags associated with `format_reward()`.
-
-#     """
-
-#     def count_tags(text: str) -> float:
-#         count = 0.0
-#         if text.count("<think>\n") == 1:
-#             count += 0.25
-#         if text.count("\n</think>\n") == 1:
-#             count += 0.25
-#         if text.count("\n<answer>\n") == 1:
-#             count += 0.25
-#         if text.count("\n</answer>") == 1:
-#             count += 0.25
-#         if text.count("<bigmodel>") > 0:
-#             count += 0.25 * text.count("<bigmodel>")
-#             if text.count("<bigmodel>") > 6:
-#                 count -= 0.25 * text.count("<bigmodel>")
-#         if text.count("</bigmodel>") > 0:
-#             count += 0.25 * text.count("</bigmodel>")\
-#             if text.count("</bigmodel>") > 6:
-#                 count -= 0.25 * text.count("</bigmodel>")
-#         return count
-
-#     contents = [completion[0]["content"] for completion in completions]
-#     return [count_tags(c) for c in contents]
 
 
 def reasoning_steps_reward(completions, **kwargs):

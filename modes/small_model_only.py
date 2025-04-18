@@ -6,6 +6,11 @@ import datetime
 import time 
 import uuid
 
+def sanitize_question(question: str) -> str:
+    terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
+    for term in terms_to_remove:
+        question = question.replace(term, "")
+    return question
 
 def run_smallmodel_flow(
     question,
@@ -43,7 +48,7 @@ def run_smallmodel_flow(
         os.makedirs(subfolder_path, exist_ok=True)
 
     bigmodel_str = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
-
+    question = sanitize_question(question)
     start_time = time.time()
     # Scaling is 0 indexed, dont ask me why lol
     for sequential_iter in range(sequential_scale + 1):

@@ -5,6 +5,7 @@ from tqdm import tqdm
 import os
 import datetime
 import time
+import uuid
 from typing import List, Tuple, Dict, Any, Optional, Union
 # final_reply, usage_data = run_random_switch_flow(
     #     question=question,
@@ -21,6 +22,13 @@ from typing import List, Tuple, Dict, Any, Optional, Union
     #     switch_ratio=switch_ratio,
     #     switch_chunk=switch_chunk,
 # )
+
+
+def sanitize_question(question: str) -> str:
+    terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
+    for term in terms_to_remove:
+        question = question.replace(term, "")
+    return question
 
 def run_random_switch_flow(
     question: str,
@@ -84,21 +92,30 @@ def run_random_switch_flow(
     # We can prefix the prompt with something similar to your reference code
     model_think_prefix = "<think>\n"
     model_think_suffix = "</think>"
+    question = sanitize_question(question)
+    base_prompt = (
+        f"<｜begin▁of▁sentence｜><｜User｜>{question}\n"
+        f"{terminating_string}"
+        f"<｜Assistant｜>\n"
+        f"{model_think_prefix}"
+    )
+    uuid_ = str(uuid.uuid4())
+    # make folder called random_switcher
+    if not os.path.exists("random_switcher"):
+        os.makedirs("random_switcher")
 
-    if "｜" not in question:
-        base_prompt = (
-            f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
-        )
-    else:
-        base_prompt = f"{question}{terminating_string}\n{model_think_prefix}"
-
+    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     current_text = base_prompt
     tokens_generated = 0
-
+    bigm_tokens = 0
+    num_big_times = 0
     # Main generation loop
     while tokens_generated < max_tokens:
         # Decide which model to use (big or small) on this step
         use_big_model = (random.random() < p_big)
+        if use_big_model:
+            num_big_times += 1
+            bigm_tokens += switch_chunk
         chosen_model = big_model if use_big_model else small_model
         chosen_port = big_model_port if use_big_model else small_model_port
 
@@ -117,6 +134,13 @@ def run_random_switch_flow(
             print(f"ERROR while generating from {chosen_model}: {e}")
             print("Traceback:", traceback.format_exc())
             # Return early with what we have so far
+            bigm_percentage = (bigm_tokens / tokens_generated) * 100 if tokens_generated > 0 else 0
+            if not os.path.exists("random_switcher.csv"):
+                with open("random_switcher.csv", "w") as f:
+                    f.write("UUID,Time,Question,Final Prompt,BigM Tokens,Num Big Times,Tokens Generated,BigM Percentage\n")
+            # Write to csv
+            with open("random_switcher.csv", "a") as f:
+                f.write(f"{uuid_},{current_time},{bigm_tokens},{num_big_times},{tokens_generated},{bigm_percentage}\n")
             return current_text, usage_data
 
         partial_resp = generation_resps[0]["choices"][0]
@@ -153,6 +177,14 @@ def run_random_switch_flow(
         final_log_path = os.path.join(subfolder_path, "final_text.txt")
         with open(final_log_path, "w", encoding="utf-8") as f:
             f.write(final_prompt)
-
+    # Get current time
+    # make a csv file called random_switcher.csv
     # Return final text and usage data
+    bigm_percentage = (bigm_tokens / tokens_generated) * 100 if tokens_generated > 0 else 0
+    if not os.path.exists("random_switcher.csv"):
+        with open("random_switcher.csv", "w") as f:
+            f.write("UUID,Time,Question,Final Prompt,BigM Tokens,Num Big Times,Tokens Generated,BigM Percentage\n")
+    # Write to csv
+    with open("random_switcher.csv", "a") as f:
+        f.write(f"{uuid_},{current_time},{bigm_tokens},{num_big_times},{tokens_generated},{bigm_percentage}\n")
     return final_prompt, usage_data

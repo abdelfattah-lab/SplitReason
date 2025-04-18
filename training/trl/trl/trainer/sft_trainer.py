@@ -282,6 +282,7 @@ class SFTTrainer(Trainer):
 
         # Resize token embeddings just in case
         model.resize_token_embeddings(len(processing_class))
+        print(f"\n\n\nMODEL TOKEN EMBEDDING RESIZED TO {len(processing_class)}\n\n\n")
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)

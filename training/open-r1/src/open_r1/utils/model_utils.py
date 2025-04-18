@@ -17,6 +17,11 @@ def get_tokenizer(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
     )
+    # Disable in interest of time.
+    # special_tokens_dict = {"additional_special_tokens": ["<bigmodel>", "</bigmodel>"]}
+    # num_added = tokenizer.add_special_tokens(special_tokens_dict)
+    # if num_added > 0:
+    #     print(f"Added {num_added} special tokens for <bigmodel> orchestration.")
 
     if training_args.chat_template is not None:
         tokenizer.chat_template = training_args.chat_template

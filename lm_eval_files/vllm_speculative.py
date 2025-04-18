@@ -168,7 +168,7 @@ class SpeculativeVLLM(TemplateLM):
         self.max_tokens = self.service_params.get("max_tokens", 16384)
         self.terminating_string = self.service_params.get(
             "terminating_string",
-            r"\\n Put your final answer within \boxed{}."
+            r"\n Put your final answer within \boxed{}."
         )
         self.test_logging = self.service_params.get("test_logging", False)
 

@@ -332,6 +332,7 @@ class GRPOTrainer(Trainer):
 
         # Resize token embeddings just in case
         model.resize_token_embeddings(len(processing_class))
+        print(f"\n\n\nMODEL TOKEN EMBEDDING RESIZED TO {len(processing_class)}\n\n\n")
         
         # Reward functions
         if not isinstance(reward_funcs, list):

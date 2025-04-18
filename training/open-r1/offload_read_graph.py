@@ -1,34 +1,28 @@
 import pickle
 import matplotlib.pyplot as plt
 
+
 def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
-    """
-    Return a list of 0/1 (len == len(text)) indicating 
-    which character positions are inside <bigmodel> ... <\bigmodel>.
-    """
     mask = [0] * len(text)
     start_index = 0
 
     while True:
-        # Find next opening tag
         open_pos = text.find(open_tag, start_index)
         if open_pos == -1:
-            # No more occurrences
-            break
+            break  # no more openings
 
-        # Find the corresponding closing tag
         close_pos = text.find(close_tag, open_pos + len(open_tag))
         if close_pos == -1:
-            # If we can't find a close tag, stop
+            # If we can't find a close tag, mark until the end of the text
+            for i in range(open_pos, len(text)):
+                mask[i] = 1
             break
-
-        # Mark the range [open_pos, close_pos + len(close_tag)) as 1
-        region_end = min(close_pos + len(close_tag), len(text))
-        for i in range(open_pos, region_end):
-            mask[i] = 1
-
-        # Move ahead, searching after the close tag
-        start_index = region_end
+        else:
+            # Mark the region from <bigmodel> ... </bigmodel>
+            region_end = close_pos + len(close_tag)
+            for i in range(open_pos, region_end):
+                mask[i] = 1
+            start_index = region_end
 
     return mask
 
@@ -57,13 +51,15 @@ def main():
         # x from 0 to 1 across the character range
         x = [k / len(mask) for k in range(len(mask))]
         y = mask  # 0/1 values
+        # calculate coverage (percentage of 1s)
+        coverage = 100.0 * sum(mask) / len(mask)
 
         # Plot with step
         ax.step(x, y, where='post')
         ax.set_ylim(-0.1, 1.1)  # 0 or 1 only
         ax.set_xlim(0, 1)
         ax.set_yticks([])
-        ax.set_title(f"Example {i}")
+        ax.set_title(f"Example {i} ({coverage:.1f}% covered)")
 
     plt.tight_layout()
     plt.savefig("switch_behavior.pdf")

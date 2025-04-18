@@ -7,6 +7,12 @@ import datetime
 import time 
 import uuid
 
+def sanitize_question(question: str) -> str:
+    terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
+    for term in terms_to_remove:
+        question = question.replace(term, "")
+    return question
+
 def run_bigmodel_flow(
     question,
     big_model,
@@ -30,7 +36,6 @@ def run_bigmodel_flow(
 
     if test_logging:
         draft_logs = "big_model_draft_logs"
-        import os
         if not os.path.exists(draft_logs):
             os.makedirs(draft_logs)
 
@@ -45,6 +50,7 @@ def run_bigmodel_flow(
 
     start_time = time.time()
     # Scaling is 0 indexed, dont ask me why lol
+    question = sanitize_question(question)
     for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
             if "｜" not in question:
@@ -77,10 +83,10 @@ def run_bigmodel_flow(
 
         final_reply_big = resp_json["choices"][0]["text"]
         if sequential_scale > 0 and sequential_iter < sequential_scale - 1:
-            # Add a '\nWait' to the final_reply_small and over-write prompt for the next iteration
+            # Add a '\nWait' to the final_reply and over-write prompt for the next iteration
             prompt = f"{prompt}{final_reply_big}\nWait"
     total_time = time.time() - start_time
-    total_tokens = token_counter(final_reply_small) if token_counter else len(final_reply_small.split())
+    total_tokens = token_counter(final_reply) if token_counter else len(final_reply.split())
     time_per_tok = total_time / total_tokens if total_tokens > 0 else 0
     uuid_ = str(uuid.uuid4())
     if not os.path.exists("big_model_benchmarks.csv"):

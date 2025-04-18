@@ -121,7 +121,7 @@ def main():
     parser.add_argument("--small_first", action="store_true")
     ### End Of Spec Rewrite Args ###
     parser.add_argument("--max_tokens", type=int, default=16384)
-    parser.add_argument("--terminating_string", type=str, default=r"\\n Put your final answer within \boxed{}.")
+    parser.add_argument("--terminating_string", type=str, default=r"\n Put your final answer within \boxed{}.")
     parser.add_argument("--terminate_on_exit", action="store_true",
                         help="Stop the vLLM servers on exit.")
     parser.add_argument("--spec_service_path", type=str, default="./spec_service.py",

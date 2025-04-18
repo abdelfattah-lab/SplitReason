@@ -79,6 +79,15 @@ def main(script_args, training_args, model_args):
     # Load tokenizer
     ################
     tokenizer = get_tokenizer(model_args, training_args)
+    print(f"\n\nSpecial tokens: {tokenizer.special_tokens_map}\n\n")
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenize_test = "hi my name is<bigmodel>, </bigmodel> and I am</bigmodel> nad therefore |<bigmodel> and ?></bigmodel> so then i thought ?<bigmodel>"
+    tokens      = tokenizer.tokenize(tokenize_test, add_special_tokens=True)
+    token_ids   = tokenizer.convert_tokens_to_ids(tokens)
+    print("\n\nTokenized test string:")
+    for tok, tid in zip(tokens, token_ids):
+        print(f"{tok:<15}  {tid}")
+    print("\n\n")
 
     # Get reward functions from the registry
     reward_funcs = get_reward_funcs(script_args)

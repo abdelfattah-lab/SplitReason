@@ -54,10 +54,27 @@ def main():
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T20-10-31.019388.jsonl"
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T22-11-36.603514.jsonl"
     # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_15bonly/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-11T11-03-26.407775.jsonl"
-    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/old_sft_grpo_15bonly/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_15bonly/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces_wrong_apr11/log_traces/new_sft_grpo_specr/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/old_sft_grpo/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/truenew_sft_grpo_apr12/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_apr13/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr14k_Sft15bonly/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr_14_grposft_14k/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr_14_grposft_14k_32b/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr_14_grposft_14k_32b_new_v3/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR_17_SFT_SPECR/meta-llama__Llama-2-7b-chat-hf"
+    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR_18_SFT_GRPO_CKPT240_SPECR/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_apr12/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_apr12/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-12T16-01-44.207388.jsonl"
     # list all files with prefix samples_
     print(f"Investigating json files in {json_folder}")
-    json_files = [f for f in os.listdir(json_folder) if f.startswith("samples_") and f.endswith(".jsonl")]
+    # Check if json_folder is a folder or file
+    if not os.path.isdir(json_folder):
+        print(f"{json_folder} is not a directory")
+        json_files = [json_folder]
+    else:
+        json_files = [f for f in os.listdir(json_folder) if f.startswith("samples_") and f.endswith(".jsonl")]
     for json_file in json_files:
         json_file = os.path.join(json_folder, json_file)
         with open(json_file, "r") as f:
@@ -88,6 +105,12 @@ def main():
                 continue
 
             # 3) Compute the mask
+            # write text to a file in a directory called "text_samples" with the name "sample_{i}.txt"
+            if not os.path.exists("text_samples"):
+                os.makedirs("text_samples")
+            with open(f"text_samples/sample_{i}.txt", "w") as f:
+                f.write(text)
+
             mask = get_bigmodel_mask(text)
 
             if len(mask) == 0:
@@ -116,7 +139,10 @@ def main():
         plt.savefig("aime24_behavior.pdf")
         plt.clf()
         plt.close()
-        print(f"Average coverage: {sum(coverage_list) / len(coverage_list):.2f}% \t std: {np.std(coverage_list):.2f}% \t min: {min(coverage_list):.2f}%\t max: {max(coverage_list):.2f}%")
+        # print(sorted(coverage_list))
+        print(coverage_list[:10])
+        median_coverage = np.median(coverage_list)
+        print(f"Median coverage: {median_coverage}\t Average coverage: {sum(coverage_list) / len(coverage_list):.2f}% \t std: {np.std(coverage_list):.2f}% \t min: {min(coverage_list):.2f}%\t max: {max(coverage_list):.2f}%")
 
 if __name__ == "__main__":
     main()
