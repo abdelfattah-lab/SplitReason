@@ -1,13 +1,17 @@
 # Speculative Reasoning
 
 ![basic-image-describing-one-possible-reasoning-composition](./figs/image.png)
+
+This repository is in active development! Our primary focus is on Speculative Reasoning (our paper pdf is in this repository).
+
 In this library, we aim to support several 'methods' of composing Large-Small reasoning language models to improve trade-off in reasoning quality - tokens generated.
 
 
-For running evaluation, put your HF_TOKEN and OPENAI_API_KEY in a .env file as:
+For running evaluation, data-generation etc, put your HF_TOKEN and OPENAI_API_KEY in a .env file as:
 ```
 OPENAI_API_KEY=XXXX
 HF_TOKEN=XXXX
+DEEPSEEK_API_KEY=XXXX
 ```
 
 # Installation
@@ -42,7 +46,17 @@ cd ./../
 
 Credit to [s1](https://github.com/simplescaling/s1/tree/main) for lm-evaluation-harness modifications.
 
-# Adding new modes
+
+
+
+# Evaluate
+
+Warning: there is a `fuser -k -9 /dev/nvidia*` in there, which will kill all your GPU jobs -- it is done to ensure everything is reset before loading new models.
+
+`bash batch_eval_baselines.sh`
+
+
+# Beyond Speculative Reasoning -- Adding new modes
 
 - Add args to spec_service.py and test_spec.py
 
@@ -137,15 +151,3 @@ python -m pip install -e .[math,vllm]
 
 - Create `random_switch_flow.py` in modes, code the `run_random_switch_flow` function, add import to `spec_service.py` 
     - `from modes.random_switch_flow import run_random_switch_flow`
-
-
-
-# Evaluate
-
-`bash eval_script.sh`
-
-# Test with custom questions
-
-As an example, this will sequentially scale once, re-draft the CoT before the sequential scaling, re-write the full CoT everytime. Also it will encourage the small model to propose potential reasoning errors for continuity. 
-
-`python test_spec.py --test_logging --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --logprob_subselect --sgen 512 --stok 16 --sdecay 2 --ltok 32`
