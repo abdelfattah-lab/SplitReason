@@ -1,4 +1,4 @@
-# Speculative Reasoning
+# SpeculativeReasoner: Learning To Offload Reasoning
 
 ![basic-image-describing-one-possible-reasoning-composition](./figs/image.png)
 
