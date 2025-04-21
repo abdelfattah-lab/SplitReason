@@ -2,7 +2,7 @@
 lm-evaluation-harness/*
 
 .env
-
+samples*.jsonl
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

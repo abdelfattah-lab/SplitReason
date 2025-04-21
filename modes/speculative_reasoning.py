@@ -105,9 +105,9 @@ def run_speculative_reasoning_flow(
     print("*"*50)
     current_text = base_prompt
     # Max per-chance bigmodel
-    max_bigmodel_perchance = 256 # MPC
+    max_bigmodel_perchance = 512 # MPC
     # keep this small but not too small, it becomes the 'batch size' for batch small model generation on stop command
-    numtok_bigmodel = 32
+    numtok_bigmodel = 64
     # for every 16 possible generations, how many tokens to geenrate to check for </bigmodel>
     numsteps_smallmodel = 8
     MAX_PERM_TOKS = 16384
@@ -160,6 +160,7 @@ def run_speculative_reasoning_flow(
 
         current_text += generation_resps[0]['choices'][0]['text']
         finish_reason = generation_resps[0]['choices'][0]['finish_reason']
+        stop_reason = generation_resps[0]['choices'][0]['stop_reason']
 
         if finish_reason == 'length':
             write_op()
@@ -177,8 +178,25 @@ def run_speculative_reasoning_flow(
                 f.write(f"{uuid_},{small_model},{numtok_bigmodel},{numsteps_smallmodel},{total_tokens},{total_time},{time_per_tok},{reason},{coverage},{mean},{median},{std}\n")
             return current_text, usage_data
         else:
-            # Here, the big-model is invoked.
-            # So, we need to do: BigGenerate --> SmallCheckForBigEnd loop
+            # Here, the big-model is invoked. (OR IS IT THE END OF TEXT? WE NEED TO CHECK finish_reason BUT WHETHER IT WAS BECAUSE OF <bigmodel> OR EOT)
+            # If it is <bigmodel> then, we need to do: BigGenerate --> SmallCheckForBigEnd loop
+            # Otherwise, we need to get that text and return it with the current text
+            if stop_reason is None:
+                current_text += generation_resps[0]['choices'][0]['text']
+                total_time = time.time() - start_time
+                total_tokens = token_counter(current_text)
+                time_per_tok = total_time / total_tokens
+                uuid_ = str(uuid.uuid4())
+                reason = "SMALL_MODEL_EOT"
+                coverage, mean, median, std = get_mask_mean_median_std(current_text)
+                # Save uuid,small_model,numtok_bigmodel,numsteps_smallmodel,total_tokens,total_time,time_per_tok to a file called "speculative_reasoning_benchmarks.csv"
+                if not os.path.exists("speculative_reasoning_benchmarks.csv"):
+                    with open("speculative_reasoning_benchmarks.csv", "w") as f:
+                        f.write("uuid,small_model,numtok_bigmodel,numsteps_smallmodel,total_tokens,total_time,time_per_tok,reason,coverage,mean,median,std\n")
+                with open("speculative_reasoning_benchmarks.csv", "a") as f:
+                    f.write(f"{uuid_},{small_model},{numtok_bigmodel},{numsteps_smallmodel},{total_tokens},{total_time},{time_per_tok},{reason},{coverage},{mean},{median},{std}\n")
+                write_op()
+                return current_text, usage_data
             # Till small model has immediately emmited </bigmodel> tag
             inloop_times = 0
             while True:
@@ -286,7 +304,7 @@ def run_speculative_reasoning_flow(
                 # Check if any small model continuation starts with the end tag
                 bigmodel_job_done = False
                 # Check if ANY of the next completions can invoke </bigmodel>
-                for idx, resp in enumerate(small_completions[0]):
+                for idx, resp in enumerate(small_completions[0][::-1]):
                     text = resp['choices'][0]['text']
                     if text.strip().__contains__("</big"):
                         # We have a match, so we can use that index intermediate completion and add </bigmodel>

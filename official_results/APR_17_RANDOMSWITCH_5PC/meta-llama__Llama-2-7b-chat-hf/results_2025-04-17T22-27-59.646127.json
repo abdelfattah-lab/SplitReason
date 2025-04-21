@@ -1,0 +1,129 @@
+{
+  "results": {
+    "aime24_nofigures": {
+      "alias": "aime24_nofigures",
+      "exact_match,none": 0.4,
+      "exact_match_stderr,none": 0.09097176522946843,
+      "extracted_answers,none": 999,
+      "extracted_answers_stderr,none": "N/A"
+    }
+  },
+  "group_subtasks": {
+    "aime24_nofigures": []
+  },
+  "configs": {
+    "aime24_nofigures": {
+      "task": "aime24_nofigures",
+      "tag": [
+        "math_word_problems"
+      ],
+      "dataset_path": "simplescaling/aime24_nofigures",
+      "dataset_name": "default",
+      "test_split": "train",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        solution = doc.get(\"solution\", doc.get(\"orig_solution\", doc.get(\"orig_orig_solution\")))\n        problem = doc.get(\"problem\", doc.get(\"question\"))\n        answer = doc.get(\"answer\", doc.get(\"orig_answer\", doc.get(\"orig_orig_answer\")))\n        if solution is None:\n            print(\"Warning: No solution found; DOC:\", doc)\n        out_doc = {\n            \"problem\": problem,\n            \"solution\": solution,\n            \"answer\": answer,\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n    return dataset.map(_process_doc)\n",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return QUERY_TEMPLATE.format(Question=doc.get(\"problem\", doc.get(\"question\")))\n",
+      "doc_to_target": "answer",
+      "process_results": "def process_results(doc: dict, results: List[str]) -> Dict[str, int]:\n    metrics = {\"exact_match\": None, \"extracted_answers\": []}\n    # bp()\n    # Multiple results -> we are measuring cov/maj etc\n    if isinstance(results[0], list):\n        results = results[0]\n        n_res = len(results) # e.g. 64\n        n_res_list = [2**i for i in range(1, int(n_res.bit_length()))] # e.g. [2, 4, 8, 16, 32, 64]\n        metrics = {\n            **metrics,\n            \"exact_matches\": [],\n            **{f\"cov@{n}\": -1 for n in n_res_list},\n            **{f\"maj@{n}\": -1 for n in n_res_list},\n        }\n\n    if os.getenv(\"PROCESSOR\", \"\") == \"gpt-4o-mini\":\n        sampler = ChatCompletionSampler(model=\"gpt-4o-mini\")\n    else:\n        print(f\"Unknown processor: {os.getenv('PROCESSOR')}; set 'PROCESSOR=gpt-4o-mini' and 'OPENAI_API_KEY=YOUR_KEY' for best results.\")\n        sampler = None\n\n    if isinstance(doc[\"answer\"], str) and doc[\"answer\"].isdigit():\n        gt = str(int(doc[\"answer\"])) # 023 -> 23\n    else:\n        gt = str(doc[\"answer\"])\n    split_tokens = [\"<|im_start|>answer\\n\", \"<|im_start|>\"]\n\n    for i, a in enumerate(results, start=1):\n        if split_tokens[0] in a:\n            a = a.split(split_tokens[0])[-1]\n        elif split_tokens[1] in a:\n            a = a.split(split_tokens[1])[-1]\n            if \"\\n\" in a:\n                a = \"\\n\".join(a.split(\"\\n\")[1:])\n\n        if (box := last_boxed_only_string(a)) is not None:\n            a = remove_boxed(box)\n        # re.DOTALL is key such that newlines are included e.g. if it does `Answer: Here is the solution:\\n\\n10`\n        elif (matches := re.findall(ANSWER_PATTERN, a, re.DOTALL)) != []:\n            a = matches[-1]  # Get the last match\n\n        # AIME answers are from 000 to 999 so often it is a digit anyways\n        if (a.isdigit()) and (gt.isdigit()):\n            a = str(int(a)) # 023 -> 23\n        elif sampler is not None:\n            options = [gt] + list(set(metrics[\"extracted_answers\"]) - {gt})\n            if len(options) > 7:\n                # Could switch back to exact returning like in AIME in that case\n                # Problem with exact returning is that it sometimes messes up small things like a dollar sign\n                print(\"Warning: Lots of options which may harm indexing performance:\", options)            \n            # This ensures that if doc['answer'] is \\text{Evelyn} it is represented as such and not \\\\text{Evelyn}\n            options_str = \"[\" + \", \".join([\"'\" + str(o) + \"'\" for o in options]) + \"]\"\n            # a = extract_answer(sampler, options, a)\n            idx = extract_answer_idx(sampler, options_str, a)\n            if idx != \"-1\":\n                if idx.isdigit():\n                    idx = int(idx) - 1\n                    if len(options) > idx >= 0:\n                        a = options[idx]\n                    else:\n                        print(\"Warning: Index out of bounds; leaving answer unchanged\\n\", a, \"\\noptions\", options_str, \"\\ndoc['answer']\", gt, \"\\nidx\", idx)\n                else:\n                    print(\"Warning: Processing did not produce integer index\\na\", a, \"\\noptions\", options_str, \"\\ndoc['answer']\", gt, \"\\nidx\", idx)\n        else:\n            pass # TODO: Maybe add back legacy processing\n\n        metrics[\"extracted_answers\"].append(a)\n        a = int(a == gt)\n        if not(a): # Optional logging\n            print(\"Marked incorrect\\na \" + metrics[\"extracted_answers\"][-1] + \"\\ndoc['answer'] \" + gt)\n        if i == 1:\n            metrics[\"exact_match\"] = a\n            if \"exact_matches\" in metrics:\n                metrics[\"exact_matches\"].append(a)\n        elif i > 1:\n            metrics[\"exact_matches\"].append(a)\n            if i in n_res_list:\n                metrics[f\"cov@{i}\"] = int(1 in metrics[\"exact_matches\"])\n                metrics[f\"maj@{i}\"] = int(gt == Counter(metrics[\"extracted_answers\"]).most_common(1)[0][0])\n\n    return metrics\n",
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "num_fewshot": 0,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true
+        },
+        {
+          "metric": "extracted_answers",
+          "aggregation": "bypass",
+          "higher_is_better": true
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "until": [],
+        "do_sample": false,
+        "temperature": 0.0,
+        "max_gen_toks": 16384,
+        "thinking_start": "\\n<think>",
+        "thinking_end": "\\n</think>"
+      },
+      "repeats": 1,
+      "should_decontaminate": false,
+      "metadata": {
+        "version": 1.0
+      }
+    }
+  },
+  "versions": {
+    "aime24_nofigures": 1.0
+  },
+  "n-shot": {
+    "aime24_nofigures": 0
+  },
+  "higher_is_better": {
+    "aime24_nofigures": {
+      "exact_match": true,
+      "extracted_answers": true
+    }
+  },
+  "n-samples": {
+    "aime24_nofigures": {
+      "original": 30,
+      "effective": 30
+    }
+  },
+  "config": {
+    "model": "vllm_speculative",
+    "model_args": "service_script_path=./spec_service.py,random_switch=True,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,small_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,max_tokens=16384,big_model_gpus=0|2,small_model_gpus=1,switch_ratio=19,switch_chunk=32,pretrained=meta-llama/Llama-2-7b-chat-hf",
+    "batch_size": "auto",
+    "batch_sizes": [],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": {
+      "max_gen_toks": 16384,
+      "thinking_start": "\\n<think>",
+      "thinking_end": "\\n</think>"
+    },
+    "random_seed": 0,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "git_hash": "72e0c46",
+  "date": 1744941597.0535903,
+  "pretty_env_info": "PyTorch version: 2.5.1+cu121\nIs debug build: False\nCUDA used to build PyTorch: 12.1\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 20.04.6 LTS (x86_64)\nGCC version: (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0\nClang version: 10.0.0-4ubuntu1 \nCMake version: version 3.16.3\nLibc version: glibc-2.31\n\nPython version: 3.10.16 (main, Dec 11 2024, 16:24:50) [GCC 11.2.0] (64-bit runtime)\nPython platform: Linux-5.4.0-190-generic-x86_64-with-glibc2.31\nIs CUDA available: True\nCUDA runtime version: 12.4.99\nCUDA_MODULE_LOADING set to: LAZY\nGPU models and configuration: \nGPU 0: NVIDIA RTX A6000\nGPU 1: NVIDIA RTX A6000\nGPU 2: NVIDIA RTX A6000\n\nNvidia driver version: 555.58.02\ncuDNN version: Probably one of the following:\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn.so.8.0.5\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn_adv_infer.so.8.0.5\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn_adv_train.so.8.0.5\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn_cnn_infer.so.8.0.5\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn_cnn_train.so.8.0.5\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn_ops_infer.so.8.0.5\n/usr/local/cuda-10.1/targets/x86_64-linux/lib/libcudnn_ops_train.so.8.0.5\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn.so.8.1.1\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn_adv_infer.so.8.1.1\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn_adv_train.so.8.1.1\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn_cnn_infer.so.8.1.1\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn_cnn_train.so.8.1.1\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn_ops_infer.so.8.1.1\n/usr/local/cuda-10.2/targets/x86_64-linux/lib/libcudnn_ops_train.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn_adv_infer.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn_adv_train.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn_cnn_infer.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn_cnn_train.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn_ops_infer.so.8.1.1\n/usr/local/cuda-11.2/targets/x86_64-linux/lib/libcudnn_ops_train.so.8.1.1\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn.so.8.2.2\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn_adv_infer.so.8.2.2\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn_adv_train.so.8.2.2\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn_cnn_infer.so.8.2.2\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn_cnn_train.so.8.2.2\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn_ops_infer.so.8.2.2\n/usr/local/cuda-11.4/targets/x86_64-linux/lib/libcudnn_ops_train.so.8.2.2\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn.so.8.8.1\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_adv_infer.so.8.8.1\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_adv_train.so.8.8.1\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_cnn_infer.so.8.8.1\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_cnn_train.so.8.8.1\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_ops_infer.so.8.8.1\n/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_ops_train.so.8.8.1\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: True\n\nCPU:\nArchitecture:                       x86_64\nCPU op-mode(s):                     32-bit, 64-bit\nByte Order:                         Little Endian\nAddress sizes:                      46 bits physical, 57 bits virtual\nCPU(s):                             32\nOn-line CPU(s) list:                0-31\nThread(s) per core:                 1\nCore(s) per socket:                 16\nSocket(s):                          2\nNUMA node(s):                       2\nVendor ID:                          GenuineIntel\nCPU family:                         6\nModel:                              143\nModel name:                         Intel(R) Xeon(R) Gold 6444Y\nStepping:                           8\nFrequency boost:                    enabled\nCPU MHz:                            797.843\nCPU max MHz:                        3601.0000\nCPU min MHz:                        800.0000\nBogoMIPS:                           7200.00\nVirtualization:                     VT-x\nL1d cache:                          1.5 MiB\nL1i cache:                          1 MiB\nL2 cache:                           64 MiB\nL3 cache:                           90 MiB\nNUMA node0 CPU(s):                  0-15\nNUMA node1 CPU(s):                  16-31\nVulnerability Gather data sampling: Not affected\nVulnerability Itlb multihit:        Not affected\nVulnerability L1tf:                 Not affected\nVulnerability Mds:                  Not affected\nVulnerability Meltdown:             Not affected\nVulnerability Mmio stale data:      Not affected\nVulnerability Retbleed:             Not affected\nVulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp\nVulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:           Mitigation; Enhanced / Automatic IBRS; IBPB conditional; RSB filling; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S\nVulnerability Srbds:                Not affected\nVulnerability Tsx async abort:      Not affected\nFlags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 cat_l2 cdp_l3 invpcid_single cdp_l2 ssbd mba ibrs ibpb stibp ibrs_enhanced tpr_shadow vnmi flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local avx512_bf16 wbnoinvd dtherm ida arat pln pts avx512vbmi umip pku ospke waitpkg avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg tme avx512_vpopcntdq rdpid cldemote movdiri movdir64b md_clear pconfig flush_l1d arch_capabilities\n\nVersions of relevant libraries:\n[pip3] numpy==1.25.0\n[pip3] pytorch-lightning==2.5.0.post0\n[pip3] torch==2.5.1+cu121\n[pip3] torchaudio==2.5.1+cu121\n[pip3] torchmetrics==1.6.1\n[pip3] torchvision==0.20.1+cu121\n[pip3] triton==3.1.0\n[conda] numpy                     1.25.0                   pypi_0    pypi\n[conda] pytorch-lightning         2.5.0.post0              pypi_0    pypi\n[conda] torch                     2.5.1+cu121              pypi_0    pypi\n[conda] torchaudio                2.5.1+cu121              pypi_0    pypi\n[conda] torchmetrics              1.6.1                    pypi_0    pypi\n[conda] torchvision               0.20.1+cu121             pypi_0    pypi\n[conda] triton                    3.1.0                    pypi_0    pypi",
+  "transformers_version": "4.48.2",
+  "upper_git_hash": null,
+  "tokenizer_pad_token": [
+    "<｜end▁of▁sentence｜>",
+    "151643"
+  ],
+  "tokenizer_eos_token": [
+    "<｜end▁of▁sentence｜>",
+    "151643"
+  ],
+  "tokenizer_bos_token": [
+    "<｜begin▁of▁sentence｜>",
+    "151646"
+  ],
+  "eot_token_id": 151643,
+  "max_length": 22528,
+  "task_hashes": {
+    "aime24_nofigures": "4f814efa54b7dca60188fcb84f7a54a4ba9879434617d54053fa85f2e1d4e2f0"
+  },
+  "model_source": "vllm_speculative",
+  "model_name": "meta-llama/Llama-2-7b-chat-hf",
+  "model_name_sanitized": "meta-llama__Llama-2-7b-chat-hf",
+  "system_instruction": null,
+  "system_instruction_sha": null,
+  "fewshot_as_multiturn": false,
+  "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+  "chat_template_sha": "56a1447ad31926fdc21fb07e56e5642bd9c850c4f52d8c8af7bbe5f079a84f5f",
+  "start_time": 17560489.33229761,
+  "end_time": 17562180.22433407,
+  "total_evaluation_time_seconds": "1690.89203646034"
+}

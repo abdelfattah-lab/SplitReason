@@ -1,9 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from datasets import load_from_disk
+from datasets import load_from_disk, load_dataset
 
-def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel>"):
+# def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel>"):
+def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="</bigmodel>"):
     mask = [0] * len(text)
     start_index = 0
 
@@ -27,37 +28,8 @@ def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel
 
     return mask
     
-# def get_bigmodel_mask(text, index, open_tag="<bigmodel>", close_tag="<\\bigmodel>"):
-#     """
-#     Return a list of 0/1 (length == len(text)) indicating
-#     which character positions are inside <bigmodel> ... <\bigmodel>.
-#     """
-#     mask = [0] * len(text)
-#     start_index = 0
-    
-#     while True:
-#         # Find next opening tag
-#         open_pos = text.find(open_tag, start_index)
-#         if open_pos == -1:
-#             break
-        
-#         # Find the corresponding closing tag
-#         close_pos = text.find(close_tag, open_pos + len(open_tag))
-#         if close_pos == -1:
-#             break
-        
-#         region_end = min(close_pos + len(close_tag), len(text))
-#         for i in range(open_pos, region_end):
-#             mask[i] = 1
-        
-#         start_index = region_end
-#     # if sum(mask) > 0.8 * len(mask):
-#         # import pdb; pdb.set_trace()
-#     return mask
-
-# 1) Load your annotated datasetfrom datasets import load_from_disk
-
-ds_deepseek = load_from_disk("OpenR1_Math_Annotated_DeepSeek")
+# ds_deepseek = load_from_disk("OpenR1_Math_Annotated_DeepSeek")
+ds_deepseek = load_dataset("akhauriyash/OpenR1_Math_SpeculativeReasoning", split="train")
 
 error_count = 0     # Number of generations containing the error string
 total_gen_count = 0 # Total number of generations seen

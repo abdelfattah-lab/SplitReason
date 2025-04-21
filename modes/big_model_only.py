@@ -65,7 +65,7 @@ def run_bigmodel_flow(
             prompt,
             port=big_model_port,
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_tokens=16384,
             model=big_model
         )
         usage_dict = resp_json.get("usage", {})

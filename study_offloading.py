@@ -29,44 +29,9 @@ def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
 
     return mask
 
-# mask = get_bigmodel_mask(test_string)
-# # get coverage
-# coverage = 100.0 * sum(mask) / len(mask)
-# print(f"Coverage: {coverage:.1f}%")
-
-
 def main():
     # 1) Load the data (adjust filename as needed)
-
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/SR_15b_only_v0/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-09T12-02-01.951099.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/SR_15b_only_v1/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-09T13-20-54.608577.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/SR_15b_only_v2/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-09T13-31-10.265245.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-09T21-38-40.981932.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_1/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-09T23-33-25.841688.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_1/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T08-09-20.612682.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_1_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T10-28-20.137619.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T11-28-43.780710.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T11-45-51.441609.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T12-05-33.361131.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T12-41-03.279610.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_nogrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T13-22-13.516233.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_test_2_wgrpo/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T16-10-38.564770.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T20-10-31.019388.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/specreason_sft/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-10T22-11-36.603514.jsonl"
-    # json_file = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_15bonly/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-11T11-03-26.407775.jsonl"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_15bonly/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces_wrong_apr11/log_traces/new_sft_grpo_specr/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/old_sft_grpo/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/truenew_sft_grpo_apr12/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_apr13/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr14k_Sft15bonly/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr_14_grposft_14k/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr_14_grposft_14k_32b/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/apr_14_grposft_14k_32b_new_v3/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR_17_SFT_SPECR/meta-llama__Llama-2-7b-chat-hf"
-    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR_18_SFT_GRPO_CKPT240_SPECR/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_apr12/meta-llama__Llama-2-7b-chat-hf"
-    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/new_sft_grpo_apr12/meta-llama__Llama-2-7b-chat-hf/samples_aime24_nofigures_2025-04-12T16-01-44.207388.jsonl"
+    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR20_SPECR_FULLTRAINGRPO_8B/meta-llama__Llama-2-7b-chat-hf"
     # list all files with prefix samples_
     print(f"Investigating json files in {json_folder}")
     # Check if json_folder is a folder or file
@@ -93,8 +58,6 @@ def main():
 
             ax = axs[i]
 
-            # Example: assume the text of interest is in data[i]['resps'][0][0]
-            # Adjust indexing if your data is different
             text = item['resps'][0][0] if item['resps'] else ""
 
             # Skip if no text
@@ -104,8 +67,6 @@ def main():
                 ax.set_yticks([])
                 continue
 
-            # 3) Compute the mask
-            # write text to a file in a directory called "text_samples" with the name "sample_{i}.txt"
             if not os.path.exists("text_samples"):
                 os.makedirs("text_samples")
             with open(f"text_samples/sample_{i}.txt", "w") as f:
@@ -118,7 +79,6 @@ def main():
                 ax.set_xticks([])
                 ax.set_yticks([])
                 continue
-
             # 4) Prepare x and y for step plot
             x = [k / len(mask) for k in range(len(mask))]
             y = mask  # 0/1 list
@@ -146,3 +106,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+

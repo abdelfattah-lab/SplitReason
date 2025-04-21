@@ -44,15 +44,21 @@ def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SelfCompress_SFT"
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SelfCompress_SFT_GRPO_INDUCETEST"
 # model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpeculativeReasoner"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner"
+
+
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpeculativeReasoner"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner_Mini"
 model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner"
+# model_name = "akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpecReasoner_SFT_GRPO_14k_v3"
 # Load tokenizer for formatting
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-import pdb; pdb.set_trace()
 # Load dataset
 dataset = load_dataset("akhauriyash/OpenR1_Math_SpeculativeReasoning", split="train")
 # dataset = load_dataset("akhauriyash/OpenR1_Math_SelfCompress", split="train")
 # Set up generation pipeline
-device = 0 if torch.cuda.is_available() else -1
+# device = 0 if torch.cuda.is_available() else -1
 
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -60,7 +66,7 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     attn_implementation="flash_attention_2",
 )
-import pdb; pdb.set_trace()
+
 generator = pipeline("text-generation", model=model, tokenizer=tokenizer, torch_dtype=torch.bfloat16)
 
 # Helper to format messages using chat template
@@ -72,6 +78,16 @@ bigmodel_counts = {}
 outputs = {}
 offp = []
 
+def sanitize_question(question: str) -> str:
+    terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
+    for term in terms_to_remove:
+        question = question.replace(term, "")
+    return question
+
+model_think_prefix = "<think>\n"
+model_think_suffix = "</think>"
+bigmodel_str = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
+terminating_string = "\n Put your final answer within \\boxed{}."
 # Loop over first 10 questions
 for i in tqdm(range(10)):
     question = dataset[i]["problem"]
@@ -79,7 +95,14 @@ for i in tqdm(range(10)):
     # Format the chat prompt properly
     messages = [{"role": "user", "content": question}]
     prompt = format_chat_prompt(messages)
-
+    question = sanitize_question(prompt)
+    prompt = (
+        f"<｜begin▁of▁sentence｜><｜User｜>{question}\n"
+        f"{bigmodel_str}\n"
+        f"{terminating_string}"
+        f"<｜Assistant｜>\n"
+        f"{model_think_prefix}"
+    )
     # Generate response
     output = generator(prompt, max_new_tokens=4096, return_full_text=False, do_sample=True, temperature=0.7)[0]["generated_text"]
     outputs[i] = output
@@ -107,7 +130,7 @@ print(bigmodel_counts)
 
 # Save outputs to file as pickle
 import pickle
-with open("bigmodel_span_text.pkl", "wb") as f: pickle.dump(outputs, f)
+with open("bigmodel_span_text_grpo.pkl", "wb") as f: pickle.dump(outputs, f)
 # import numpy as np
 # from datasets import load_dataset
 # mydata = load_dataset("akhauriyash/OpenR1_Math_SpeculativeReasoning")
