@@ -23,3 +23,5 @@ offload_percent,offload_type,run,accuracy
 5,learned,2,0.4666666
 5,learned,3,0.4666666
 5,learned,4,0.4666666
+5,learned,3,0.4
+5,learned,4,0.4333333

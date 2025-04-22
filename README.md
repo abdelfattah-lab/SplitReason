@@ -1,4 +1,6 @@
-# SpeculativeReasoner: Learning To Offload Reasoning
+# SplitReason: Learning To Offload Reasoning
+
+# Note: We are in the process of migrating 'Speculative' to 'Split' to better align with the proposed methodology.
 
 ![basic-image-describing-one-possible-reasoning-composition](./figs/image.png)
 

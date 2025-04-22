@@ -108,7 +108,7 @@ def collect_all(base_path: str) -> Dict[str, Any]:
     return aggregated
 
 
-if True:
+if False:
     ROOT = "./"
     all_metrics = collect_all(ROOT)
 
@@ -216,6 +216,10 @@ def graph_type_1():
     # Simulated
     small_gain_factors = {8: 0.894,  14: 0.795, 32: 0.729}
 
+    def model_size(name: str):
+        import re
+        m = re.search(r"(\d+(\.\d+)?)B", name)
+        return float(m.group(1)) if m else None
     for name, et, acc, is_spec in scatter_tuples:
         sz = model_size(name)
         if sz is None or sz not in baseline_shades:
@@ -258,7 +262,7 @@ def graph_type_1():
 
     legend_rows.sort()
     handles = [r[2] for r in legend_rows]
-    labels  = [r[3].replace("SpecR", "SpeculativeReasoner") for r in legend_rows]
+    labels  = [r[3].replace("SpecR", "SplitReasoner") for r in legend_rows]
 
     ax_scat.legend(handles, labels,
                 fontsize=18, loc="lower right", framealpha=0.9, ncol=2)
@@ -412,10 +416,9 @@ def graph_type_2():
             label=row["name"]        # each handle is unique for legend
         )
         scatter_handles[row["name"]] = h
-    import pdb; pdb.set_trace()
     # ‑‑‑‑‑‑ Build a tidy legend (same sorting trick as before) ‑‑‑‑‑‑
     legend_rows = [
-        ("SpecR" in n, -model_size(n), h[0], n.replace("SpecR", "SpeculativeReasoner"))
+        ("SpecR" in n, -model_size(n), h[0], n.replace("SpecR", "SplitReasoner"))
         for n, h in scatter_handles.items()
     ]
     legend_rows.sort()
@@ -525,7 +528,7 @@ def graph_type_3():
         h = ax_scat.errorbar(
             row["mean_time"], row["mean_acc"],
             xerr=row["std_time"], yerr=row["std_acc"],
-            fmt=marker, markersize=msize, markeredgewidth=0,
+            fmt=marker, markersize=2*msize, markeredgewidth=0,
             ecolor=colour, color=colour, capsize=5, alpha=0.9,
             label=row["name"],
         )
@@ -533,18 +536,21 @@ def graph_type_3():
 
     # tidy legend
     legend_rows = [
-        ("SpecR" in n, -model_size(n), h[0], n.replace("SpecR", "SpeculativeReasoner"))
+        ("SpecR" in n, -model_size(n), h[0], n.replace("SpecR", "SplitReasoner"))
         for n, h in scatter_handles.items()
     ]
     legend_rows.sort()
     ax_scat.legend(
         [t[2] for t in legend_rows],
         [t[3] for t in legend_rows],
-        fontsize=18, loc="lower right", framealpha=0.9, ncol=2
+        fontsize=20, loc="lower right", framealpha=0.9, ncol=2
     )
 
     ax_scat.set_xlabel("Pipelined Simulation Time (seconds)", fontsize=22)
-    ax_scat.set_ylabel("Accuracy (%)", fontsize=22)
+    ax_scat.set_ylabel("AIME24 Accuracy (%)", fontsize=22)
+    # ax_scat.set_xscale("log")
+    # set x axis lower limit to 0
+    ax_scat.set_xlim(left=0)
     ax_scat.tick_params(axis="both", labelsize=18)
     ax_scat.margins(x=0.08)
 
@@ -570,4 +576,106 @@ def graph_type_3():
         fh.write("\n".join(latex_lines))
     print("Saved: acc_lat_scatter.pdf  |  model_metrics_table.tex")
 
+def graph_teaser() -> None:
+    """
+    One point per *model size*:
+        • circles  – plain models   (1.5 B, 8 B, 14 B)
+        • stars    – SpecR models   (8 B, 14 B, 32 B)
+
+    Two grey dashed lines connect the sizes within each group.
+    """
+    ignore_systems = {
+        "SpecR Random 10%", "SpecR Random 5%", "SpecR 32B Minimal", "32B"
+    }
+
+    # --- mean values --------------------------------------------------------
+    plain_models  = {}
+    spec_models   = {}
+
+    for sys_name, runs in all_metrics.items():
+        if sys_name in ignore_systems:
+            continue
+
+        mean_time = np.mean([r["eval_time"] for r in runs.values()])
+        mean_acc  = np.mean([r["accuracy"]  for r in runs.values()]) * 100.0  # %
+
+        if sys_name.startswith("SpecR"):
+            spec_models[sys_name]  = (mean_time, mean_acc)
+        else:
+            plain_models[sys_name] = (mean_time, mean_acc)
+
+    # sort by numeric model size (1.5, 8, 14, 32)
+    def sort_key(name: str) -> float:
+        m = re.search(r"(\d+(\.\d+)?)B", name)
+        return float(m.group(1)) if m else 0.0
+
+    plain_items = sorted(plain_models.items(), key=lambda p: sort_key(p[0]))
+    spec_items  = sorted(spec_models.items(),  key=lambda p: sort_key(p[0]))
+
+    # ─── colour palettes ──────────────────────────────────────────
+    baseline_shades = {          # 1.5 B, 8 B, 14 B
+        14: "#213448",   # darkest blue‑grey
+        8:   "#547792",   # medium slate‑blue
+        1.5:  "#94B4C1",   # light steel‑blue
+    }
+
+    spec_shades = {              # 8 B, 14 B, 32 B
+        8:  "#88304E",    # vivid red‑pink
+        14: "#522546",    # deep raspberry
+        32: "#F7374F",    # dark wine
+    }
+    def size_of(name: str) -> float:
+        return sort_key(name)
+
+    # --- draw ---------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    # circles  – plain
+    for name, (t, acc) in plain_items:
+        sz  = size_of(name)
+        col = baseline_shades.get(sz, "#aaaaaa")
+        ax.scatter(t, acc, s=150, marker="o", color=col, label=name)
+
+    # stars   – Split Reasoner
+    for name, (t, acc) in spec_items:
+        sz  = size_of(name)
+        col = spec_shades.get(sz, "#888888")
+        label = name.replace("SpecR", "SplitReasoner")
+        ax.scatter(t, acc, s=240, marker="*", color=col, label=label)
+
+    # dashed trend‑lines
+    plain_xy = np.array([p[1] for p in plain_items])
+    spec_xy  = np.array([p[1] for p in spec_items])
+
+    ax.plot(plain_xy[:, 0], plain_xy[:, 1], linestyle="--", color="grey", linewidth=1)
+    ax.plot(spec_xy[:, 0],  spec_xy[:, 1],  linestyle="--", color="grey", linewidth=1)
+
+    # cosmetics
+    ax.set_xlabel("Mean evaluation time (seconds)", fontsize=16)
+    ax.set_ylabel("Mean AIME24 Accuracy",          fontsize=16)
+    ax.grid(True, linestyle=":", linewidth=0.5, alpha=0.7)
+
+    # ordered legend
+    desired_order = ["1.5B", "8B", "14B", "32B",
+                     "SplitReasoner 8B",
+                     "SplitReasoner 14B",
+                     "SplitReasoner 32B"]
+
+    handles, labels = ax.get_legend_handles_labels()
+    ordering = sorted(
+        range(len(labels)),
+        key=lambda i: desired_order.index(labels[i])
+    )
+    ax.legend([handles[i] for i in ordering],
+              [labels[i]  for i in ordering],
+              fontsize=11, framealpha=0.95, ncol=2, loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig("accuracy_to_latency_teaser.pdf", format="pdf")
+    print("Saved → accuracy_to_latency_teaser.pdf")
+
+
+graph_type_1()
+graph_type_2()
 graph_type_3()
+graph_teaser()

@@ -175,7 +175,7 @@ def run_inverted_scaling_law_plot(
         plt.plot(
             speedup_list,
             coverage_list,
-            label=f"SpeculativeReasoner {big_model}",
+            label=f"SplitReasoner {big_model}",
             color=color,
             # marker='o'
         )
@@ -335,7 +335,9 @@ def run_inverted_scaling_law_plot_and_random_ablation_plot(
         ax=ax_left,
         widths=0.6,              # << fatter boxes
         boxprops=dict(linewidth=1.5),   # optional: bolder box edges
-        medianprops=dict(linewidth=2)   # optional: bolder median line
+        medianprops=dict(linewidth=2),   # optional: bolder median line and remove the outlier dot,
+    showfliers=False,         
+        
     )
     ax_left.set_title("AIME24 Accuracy", fontsize=22)
     ax_left.set_xlabel("Offloading Mode", fontsize=22)
@@ -403,8 +405,31 @@ def run_inverted_scaling_law_plot_and_random_ablation_plot(
         ax_right.plot(
             x_speedup,
             y_frac_small,
-            label=f"SpeculativeReasoner {big_model}",
+            label=f"SplitReasoner {big_model}",
             linewidth=4,
+            color=color,
+        )
+    # --- reference off‑load levels (right‑aligned labels) ----------
+    offload_levels = [
+        (0.90,  "10% offload",  "#522546"),  # light red
+        (0.95,  "5% offload",   "#88304E"),  # medium red
+        (0.986, "1.4% offload", "#F7374F"),  # dark red
+    ]
+
+    xmax = ax_right.get_xlim()[1]          # current right edge
+
+    for y, label, color in offload_levels:
+        ax_right.axhline(y=y, linestyle="--", linewidth=2, color=color, alpha=0.9)
+
+        ax_right.annotate(
+            label,
+            xy=(xmax, y),                   # anchor at the right border
+            xytext=(-6, -6),                # 6 px left & 6 px down
+            textcoords="offset points",
+            ha="right",                     # right‑align text to the anchor
+            va="top",                       # place just under the line
+            fontsize=18,
+            fontweight='bold',                # makes the text bold
             color=color,
         )
 
