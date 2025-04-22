@@ -2,7 +2,7 @@
 
 # Note: We are in the process of migrating 'Speculative' to 'Split' to better align with the proposed methodology.
 
-![basic-image-describing-one-possible-reasoning-composition](./figs/image.png)
+![basic-image-describing-one-possible-reasoning-composition](./figs/accuracy_to_latency_teaser_main.png)
 
 This repository is in active development! Our primary focus is on Speculative Reasoning (our paper pdf is in this repository).
 

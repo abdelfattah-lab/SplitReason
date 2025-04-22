@@ -672,6 +672,7 @@ def graph_teaser() -> None:
 
     fig.tight_layout()
     fig.savefig("accuracy_to_latency_teaser.pdf", format="pdf")
+    fig.savefig("accuracy_to_latency_teaser.png", format="png", dpi=600)
     print("Saved → accuracy_to_latency_teaser.pdf")
 
 
