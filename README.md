@@ -1,9 +1,9 @@
 # SplitReason: Learning To Offload Reasoning
 
-# Note: We are in the process of migrating 'Speculative' to 'Split' to better align with the proposed methodology.
+## Note: We are in the process of migrating 'Speculative' to 'Split' to better align with the proposed methodology. The code still works as expected.
 
 ![basic-image-describing-one-possible-reasoning-composition](./figs/accuracy_to_latency_teaser_main.png)
-
+<!-- ![alt text](image.png) -->
 This repository is in active development! Our primary focus is on Speculative Reasoning (our paper pdf is in this repository).
 
 In this library, we aim to support several 'methods' of composing Large-Small reasoning language models to improve trade-off in reasoning quality - tokens generated.
