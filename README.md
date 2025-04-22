@@ -19,8 +19,8 @@ DEEPSEEK_API_KEY=XXXX
 `python -m pip install -r requirements.txt`
 
 Additionally, please follow the setup commands below. We have to modify lm-evaluation-harness to:
-- Route requests to our evaluation service.
-- Add AIME24 and MATH tasks for evaluation.
+- Route requests to our evaluation service (relies on vLLM).
+- Add AIME24, MATH500 tasks for evaluation.
 
 ```
 # Check-out appropriate LM-Evaluation-Harness commit ID.
@@ -46,8 +46,15 @@ cd ./../
 
 Credit to [s1](https://github.com/simplescaling/s1/tree/main) for lm-evaluation-harness modifications.
 
+# Training
 
+We clone [open-r1](https://github.com/huggingface/open-r1) in `training/`. We also clone [trl](https://github.com/huggingface/trl/) as we conducted tests with / without adding 'special' tokens. 
+For training, please follow the open-r1 installation instructions. 
+**Environment for evaluation is different from training environment!**
 
+`training/open-r1/` contains the base_training.sh script for SFT and GRPO. Please ensure you set all data and model file-paths correctly. Further, adjust your `recipes/accelerate_configs` based on number of available GPUs. 
+
+As shown in `training/open-r1/base_training.sh` for GRPO, there are two scripts. These must be launched in parallel wiht the appropriate port configuration.
 
 # Evaluate
 
@@ -57,6 +64,8 @@ Warning: there is a `fuser -k -9 /dev/nvidia*` in there, which will kill all you
 
 
 # Beyond Speculative Reasoning -- Adding new modes
+
+This project started as an experimentation on how big-small models can work together to improve performance on reasoning tasks. We set up a simple evaluation framework that works relatively fast -- AIME24, MATH500 are good proxies for experimentation. We have reference baselines in `modes` such as `random_switch_flow.py`, which is the random-switching baseline from our paper. We also have `logprob_subselect.py`, which lets the small model do several parallel generations, then uses the big model for decoding a few tokens, and uses the decoded token log-probs to select promising decode-chains. While such experiments did not make it to the paper, it may be interesting for the open-source community to tinker with small-big language model compositions and strategies! To do so, please refer to the documentation below:
 
 - Add args to spec_service.py and test_spec.py
 
