@@ -30,18 +30,37 @@ def wait_for_service(host: str, port: int, timeout: float = 300.0) -> bool:
 def print_usage_table(usage_data):
     rows = []
     for ent in usage_data:
-        model = ent.get("Model", "")
-        think = ent.get("ThinkIter", "")
-        ver = ent.get("DraftVersion", "")
-        p = ent.get("PromptTokens", 0)
-        c = ent.get("CompletionTokens", 0)
-        lat = ent.get("Latency", 0.0)
-        per_tok = lat / c if c else 0.0
-        rows.append([model, think, ver, p, c, round(lat,2), round(per_tok,4)])
+        model    = ent.get("Model", "")
+        think    = ent.get("ThinkIter", "")
+        ver      = ent.get("DraftVersion", "")
+        p        = ent.get("PromptTokens", 0)
+        c        = ent.get("CompletionTokens", 0)
+        acc      = ent.get("AcceptedTokens", 0) # NOTE: these values are wrong, which are fetched directly from /metrics.
+        draft    = ent.get("DraftTokens", 0)
+        emit     = ent.get("EmittedTokens", 0)
+        acc_rate = ent.get("AcceptanceRate", 0.0)
+        eff      = ent.get("Efficiency", 0.0)
+        lat      = ent.get("Latency", 0.0)
+        per_tok  = lat / c if c else 0.0
+
+        rows.append([
+            model, think, ver, p, c,
+            # acc, draft, emit,
+            round(acc_rate, 4), round(eff, 4),
+            round(lat, 2),    round(per_tok, 4)
+        ])
+
+        # we approximate usage
+        ratio = c / emit
+
     print("\n=== Token Usage Summary ===")
     print(tabulate(
         rows,
-        headers=["Model","ThinkIter","DraftVer","PromptToks","CompleteToks","Latency(s)","Lat(s)/Tok"],
+        headers=[
+            "Model","ThinkIter","DraftVer","PromptToks","CompleteToks",
+            "Accepted","Draft","Emitted","AccRate","Efficiency",
+            "Latency(s)","Lat(s)/Tok"
+        ],
         tablefmt="grid"
     ))
     print()
@@ -165,15 +184,6 @@ def main():
     print(result.get("final_answer", "").strip())
     print_usage_table(result.get("usage_records", []))
 
-    spec_metrics = get_spec_metrics(args.host, args.big_model_port)
-    if spec_metrics:
-        print("\n=== Speculative Decoding Runtime Metrics (/metrics) ===")
-        for name, val in spec_metrics.items():
-            print(f"{name:<50}: {val}")
-    else:
-        print("\n[Warning] No speculative‑decoding metrics found in /metrics.")
-
-    # 6) If terminate_on_exit, leave service to clean up on CTRL+C
     if args.terminate_on_exit:
         print("[test] Service will shut down its vLLM servers on exit.")
 
