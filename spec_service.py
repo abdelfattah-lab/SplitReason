@@ -9,6 +9,7 @@ import threading
 
 from flask import Flask, request, jsonify
 from typing import List, Tuple, Dict, Any, Optional, Union
+import re
 
 from modes.speculative_reasoning_perf_profiling import run_speculative_reasoning_flow_perf_only
 from modes.spec_rewrite import run_speculative_rewrite_flow
@@ -484,9 +485,32 @@ def batched_eval_logprob_vllm(
     num_requests = len(text_batch)
 
     return scores, gentexts, avg_latency, num_requests
-    
+
+def _get_spec_metrics(port: int, model_name: str) -> dict:
+    """
+    Scrape vLLM's /metrics endpoint and parse out the five
+    speculative‑decoding values into a dict.
+    """
+    text = requests.get(f"http://localhost:{port}/metrics").text
+    print(text)
+    patterns = {
+        "accepted":        "spec_decode_num_accepted_tokens_total",
+        "draft":           "spec_decode_num_draft_tokens_total",
+        "emitted":         "spec_decode_num_emitted_tokens_total",
+        "acceptance_rate": "spec_decode_draft_acceptance_rate",
+        "efficiency":      "spec_decode_efficiency",
+    }
+    out = {}
+    for key, prom in patterns.items():
+        m = re.search(
+            rf'vllm:{prom}\{{model_name="{model_name}"\}} ([0-9.]+)',
+            text
+        )
+        out[key] = float(m.group(1)) if m else 0.0
+    return out
+
 def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", 
-    is_bigmodel_halting=False,):
+    is_bigmodel_halting=False, speculative_decoding=True):
     """
     A direct call to the vLLM HTTP server's /v1/completions endpoint.
     """
@@ -507,11 +531,28 @@ def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+    
+    if speculative_decoding:
+        before = _get_spec_metrics(port, model)
+        print("before:", before)
+    
     start_time = time.time()
     resp = requests.post(url, json=payload)
     end_time = time.time()
     resp.raise_for_status()
     latency = end_time - start_time
+
+    if speculative_decoding:
+        after = _get_spec_metrics(port, model)
+        metrics = {
+            "accepted_tokens":   after["accepted"]       - before["accepted"],
+            "draft_tokens":      after["draft"]          - before["draft"],
+            "emitted_tokens":    after["emitted"]        - before["emitted"],
+            "acceptance_rate":   after["acceptance_rate"],
+            "efficiency":        after["efficiency"],
+        }
+        return resp.json(), latency, metrics
+    
     return resp.json(), latency
 
 def extract_cot(raw_text, think_suffix, fallback_suffixes=()):
@@ -807,7 +848,7 @@ def parse_args():
     parser.add_argument("--speculative_config", type=str, default=None,help="JSON string for vLLM speculative_config (e.g. '{\"model\":...,\"num_speculative_tokens\":5,...}')")
     parser.add_argument("--seed", type=int, default=42,help="Random seed for speculative decoding server")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9,help="vLLM GPU memory utilization fraction")
-    parser.add_argument("--max_model_len", type=int, default=4096,help="Max model length for speculative decoding server")
+    parser.add_argument("--max_model_len", type=int, default=32768,help="Max model length for speculative decoding server")
     parser.add_argument("--enforce_eager", action="store_true",help="Pass --enforce-eager to the vLLM server")
 
     ### LogProb Subselect Args ###
