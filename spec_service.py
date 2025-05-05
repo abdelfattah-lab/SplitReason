@@ -19,6 +19,7 @@ from modes.logprob_subselect import run_logprob_subselect_flow
 from modes.small_model_only import run_smallmodel_flow
 from modes.big_model_only import run_bigmodel_flow
 from modes.random_switch_flow import run_random_switch_flow
+from modes.speculative_decoding import run_speculative_decoding_flow
 from transformers import AutoTokenizer
 
 import json
@@ -218,6 +219,38 @@ def launch_small_model(model_name, port, gpu_ids):
 #     ]
 #     print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
 #     return subprocess.Popen(cmd, env=env)
+
+def launch_spec_decoding_server(
+    big_model: str,
+    port: int,
+    gpu_ids: str,
+    seed: int,
+    gpu_memory_utilization: float,
+    speculative_config: str,
+    max_model_len: int,
+    enforce_eager: bool,
+):
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = gpu_ids
+    tp_size = len(gpu_ids.split(","))
+
+    cmd = [
+        "python", "-m", "vllm.entrypoints.openai.api_server",
+        "--host", "0.0.0.0",
+        "--port", str(port),
+        "--model", big_model,
+        "--seed", str(seed),
+        "--tensor-parallel-size", str(tp_size),
+        "--gpu_memory_utilization", str(gpu_memory_utilization),
+        "--speculative_config", speculative_config,
+        "--max-model-len", str(max_model_len),
+        "--enable_prefix_caching",
+    ]
+    if enforce_eager:
+        cmd.append("--enforce-eager")
+
+    print(f"[Service] Launching speculative‑decoding server on port {port} with model {big_model}")
+    return subprocess.Popen(cmd, env=env)
 
 def batched_generate_text_vllm(
     prompts: List[str], 
@@ -670,6 +703,16 @@ def speculative_reason():
             sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
             token_counter=approximate_token_count
         )
+    elif data.get("spec_decoding", False):
+        final_reply, usage_data = run_speculative_decoding_flow(
+            question=question,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            generate_text_vllm=generate_text_vllm,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            test_logging=test_logging,
+        )
 
     elif data.get("spec_reason_perf", False):
         final_reply, usage_data = run_speculative_reasoning_flow_perf(
@@ -759,6 +802,14 @@ def parse_args():
     parser.add_argument("--small_model_only", action="store_true")
     ### End Of Modes, only 1 can be true ###
     parser.add_argument("--test_logging", action="store_true")
+
+    parser.add_argument("--spec_decoding", action="store_true",help="Launch vLLM in OpenAI API mode with speculative_decoding")
+    parser.add_argument("--speculative_config", type=str, default=None,help="JSON string for vLLM speculative_config (e.g. '{\"model\":...,\"num_speculative_tokens\":5,...}')")
+    parser.add_argument("--seed", type=int, default=42,help="Random seed for speculative decoding server")
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9,help="vLLM GPU memory utilization fraction")
+    parser.add_argument("--max_model_len", type=int, default=4096,help="Max model length for speculative decoding server")
+    parser.add_argument("--enforce_eager", action="store_true",help="Pass --enforce-eager to the vLLM server")
+
     ### LogProb Subselect Args ###
     parser.add_argument("--sgen", type=int, default=8)
     parser.add_argument("--stok", type=int, default=16)
@@ -792,12 +843,43 @@ def main():
     global big_model_proc, small_model_proc, service_args
 
     service_args = parse_args()
-    if service_args.max_iterations is None:
-        service_args.max_iterations = 32768 // (service_args.stok * service_args.ltok) 
 
     # Determine which models to launch based on mode
-    need_big_model = not service_args.small_model_only
-    need_small_model = not service_args.big_model_only
+    # — Pure speculative‐decoding mode —
+    if service_args.spec_decoding:
+        if service_args.speculative_config is None:
+            print("[Service] ERROR: --speculative_config must be provided for speculative‐decoding mode")
+            sys.exit(1)
+
+        print("[Service] Starting speculative‑decoding mode …")
+        big_model_proc = launch_spec_decoding_server(
+            service_args.big_model,
+            service_args.big_model_port,
+            service_args.big_model_gpus,
+            service_args.seed,
+            service_args.gpu_memory_utilization,
+            service_args.speculative_config,
+            service_args.max_model_len,
+            service_args.enforce_eager,
+        )
+
+        print("[Service] Waiting for speculative decoding server to be ready …")
+        if not wait_for_server(f"http://localhost:{service_args.big_model_port}/ping"):
+            print("[Service] Speculative decoding server did not come up in time. Exiting.")
+            big_model_proc.terminate()
+            sys.exit(1)
+        print("[Service] Speculative decoding server is up.")
+
+        # In pure‐decoding mode, we skip launching any other models
+        need_big_model = False
+        need_small_model = False
+
+    else:
+        if service_args.max_iterations is None:
+            service_args.max_iterations = 32768 // (service_args.stok * service_args.ltok) 
+
+        need_big_model = not service_args.small_model_only
+        need_small_model = not service_args.big_model_only
     
     # Load tokenizer
     load_big_model_tokenizer(service_args.big_model)
