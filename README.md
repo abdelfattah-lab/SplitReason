@@ -162,3 +162,16 @@ python -m pip install -e .[math,vllm]
 
 - Create `random_switch_flow.py` in modes, code the `run_random_switch_flow` function, add import to `spec_service.py` 
     - `from modes.random_switch_flow import run_random_switch_flow`
+
+
+# Citation
+
+If you use our work, please do cite us as:
+```
+@article{akhauri2025splitreason,
+  title={SplitReason: Learning To Offload Reasoning},
+  author={Akhauri, Yash and Fei, Anthony and Chang, Chi-Chih and AbouElhamayed, Ahmed F and Li, Yueying and Abdelfattah, Mohamed S},
+  journal={arXiv preprint arXiv:2504.16379},
+  year={2025}
+}
+```
