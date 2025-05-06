@@ -94,6 +94,7 @@ def main():
     ### Modes, only 1 can be true ###
     parser.add_argument("--placeholder_mode", action="store_true")
     parser.add_argument("--spec_rewrite", action="store_true")
+    parser.add_argument("--spec_reason_perf", action="store_true")
     parser.add_argument("--spec_reason", action="store_true")
     parser.add_argument("--random_switch", action="store_true")
     parser.add_argument("--logprob_subselect", action="store_true")
@@ -133,8 +134,8 @@ def main():
     if args.max_iterations is None:
         args.max_iterations = 32768 // (args.stok * args.ltok)
     
-    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch, args.spec_reason]) != 1:
-        print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, spec_reason, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
+    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch, args.spec_reason, args.spec_reason_perf]) != 1:
+        print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, spec_reason, spec_reason_perf, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
         sys.exit(1)
 
     # kill_cmd = "fuser -k -9 /dev/nvidia*"
@@ -194,6 +195,8 @@ def main():
         cmd.append("--spec_rewrite")
     if args.spec_reason:
         cmd.append("--spec_reason")
+    if args.spec_reason_perf:
+        cmd.append("--spec_reason_perf")
     if args.big_model_only:
         cmd.append("--big_model_only")
     if args.small_model_only:
@@ -228,6 +231,7 @@ def main():
         "logprob_subselect": args.logprob_subselect,
         "spec_rewrite": args.spec_rewrite,
         "spec_reason": args.spec_reason,
+        "spec_reason_perf": args.spec_reason_perf,
         "big_model_only": args.big_model_only,
         "small_model_only": args.small_model_only,
         "switch_ratio": args.switch_ratio,

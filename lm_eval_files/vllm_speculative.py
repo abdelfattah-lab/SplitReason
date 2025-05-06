@@ -141,6 +141,7 @@ class SpeculativeVLLM(TemplateLM):
         self.big_model_only = self.service_params.get("big_model_only", False)
         self.small_model_only = self.service_params.get("small_model_only", False)
         self.spec_reason = self.service_params.get("spec_reason", False)
+        self.spec_reason_perf = self.service_params.get("spec_reason_perf", False)
 
         # likewise for numeric fields:
         self.sgen = self.service_params.get("sgen", 256)
@@ -294,6 +295,8 @@ class SpeculativeVLLM(TemplateLM):
             cmd.append("--test_logging")
         if self.spec_reason:
             cmd.append("--spec_reason")
+        if self.spec_reason_perf:
+            cmd.append("--spec_reason_perf")
         
         eval_logger.info(f"[SpeculativeVLLM] Launching: {' '.join(cmd)}")
         env = os.environ.copy()
