@@ -31,7 +31,9 @@ def get_bigmodel_mask(text, open_tag="<bigmodel>", close_tag="</bigmodel>"):
 
 def main():
     # 1) Load the data (adjust filename as needed)
-    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR20_SPECR_FULLTRAINGRPO_8B/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR20_SPECR_FULLTRAINGRPO_8B/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B/meta-llama__Llama-2-7b-chat-hf"
+    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_7B_Qwen/meta-llama__Llama-2-7b-chat-hf"
     # list all files with prefix samples_
     print(f"Investigating json files in {json_folder}")
     # Check if json_folder is a folder or file

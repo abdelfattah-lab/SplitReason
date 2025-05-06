@@ -1,6 +1,6 @@
 # SplitReason: Learning To Offload Reasoning
 
-## Note: We are in the process of migrating 'Speculative' to 'Split' to better align with the proposed methodology. The code still works as expected.
+## Note: We are in the process of refactoring our code to change 'Speculative' to 'Split' to better align with the proposed methodology. The code still works as expected, and both Speculative / Split - named models are on huggingface.
 
 ![basic-image-describing-one-possible-reasoning-composition](./figs/accuracy_to_latency_teaser_main.png)
 <!-- ![alt text](image.png) -->
