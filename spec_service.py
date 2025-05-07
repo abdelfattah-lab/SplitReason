@@ -492,7 +492,6 @@ def _get_spec_metrics(port: int, model_name: str) -> dict:
     speculative‑decoding values into a dict.
     """
     text = requests.get(f"http://localhost:{port}/metrics").text
-    print(text)
     patterns = {
         "accepted":        "spec_decode_num_accepted_tokens_total",
         "draft":           "spec_decode_num_draft_tokens_total",
@@ -515,6 +514,7 @@ def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model
     A direct call to the vLLM HTTP server's /v1/completions endpoint.
     """
     url = f"http://localhost:{port}/v1/completions"
+
     if is_bigmodel_halting:
         payload = {
             "model": model,
