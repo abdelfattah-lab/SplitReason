@@ -45,55 +45,24 @@ def print_usage_table(usage_data):
 
         rows.append([
             model, think, ver, p, c,
-            # acc, draft, emit,
+            acc, draft, emit,
             round(acc_rate, 4), round(eff, 4),
             round(lat, 2),    round(per_tok, 4)
         ])
-
-        # we approximate usage
-        ratio = c / emit
 
     print("\n=== Token Usage Summary ===")
     print(tabulate(
         rows,
         headers=[
             "Model","ThinkIter","DraftVer","PromptToks","CompleteToks",
-            "Accepted","Draft","Emitted","AccRate","Efficiency",
+            "Accepted","Draft","Emitted",
+            "AccRate","Efficiency",
             "Latency(s)","Lat(s)/Tok"
         ],
         tablefmt="grid"
     ))
     print()
-    
 
-def get_spec_metrics(host: str, port: int) -> dict:
-    """
-    Fetch /metrics from the vLLM server and extract speculative‑decoding stats.
-    """
-    metrics_url = f"http://{host}:{port}/metrics"
-    try:
-        resp = requests.get(metrics_url, timeout=5)
-        resp.raise_for_status()
-        text = resp.text
-    except Exception as e:
-        print(f"[test] Could not fetch metrics: {e}")
-        return {}
-
-    keys = [
-        "vllm:spec_decode_draft_acceptance_rate",
-        "vllm:spec_decode_efficiency",
-        "vllm:spec_decode_num_accepted_tokens_total",
-        "vllm:spec_decode_num_draft_tokens_total",
-        "vllm:spec_decode_num_emitted_tokens_total",
-    ]
-
-    stats = {}
-    for key in keys:
-        # match lines like: vllm:spec_decode_draft_acceptance_rate 0.607
-        m = re.search(rf"^{re.escape(key)}\s+([0-9\.e+-]+)", text, re.MULTILINE)
-        if m:
-            stats[key] = float(m.group(1))
-    return stats
 
 def main():
     parser = argparse.ArgumentParser(description="Run spec_service.py in speculative‑decoding mode and test it once.")
@@ -173,6 +142,7 @@ def main():
         "question": args.question,
         "spec_decoding": True,
         "test_logging": args.test_logging,
+        "max_tokens": 2048,
     }
     print(f"[test] Sending payload: {payload}")
     resp = requests.post(f"http://{args.host}:{args.service_port}/speculative_reason", json=payload)
