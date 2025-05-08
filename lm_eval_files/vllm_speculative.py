@@ -135,6 +135,14 @@ class SpeculativeVLLM(TemplateLM):
         self.service_port = speculative_reasoner_port
         self.service_params = coerce_all_types(kwargs)
 
+        # speculative decoding mode
+        self.spec_decoding = self.service_params.get("spec_decoding", False)
+        self.speculative_config = self.service_params.get("speculative_config", None)
+        self.seed = self.service_params.get("seed", 42)
+        self.gpu_memory_utilization = self.service_params.get("gpu_memory_utilization", 0.9)
+        self.spec_max_model_len = self.service_params.get("max_model_len", None)
+        self.enforce_eager = self.service_params.get("enforce_eager", False)
+
         # after that, read out each new param, with defaults, e.g.:
         self.placeholder_mode = self.service_params.get("placeholder_mode", False)
         self.spec_rewrite = self.service_params.get("spec_rewrite", False)
@@ -174,7 +182,6 @@ class SpeculativeVLLM(TemplateLM):
             r"\n Put your final answer within \boxed{}."
         )
         self.test_logging = self.service_params.get("test_logging", False)
-
 
         self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
         self._ensure_correct_service_is_running()
@@ -294,6 +301,15 @@ class SpeculativeVLLM(TemplateLM):
             "--port", str(self.service_port),
             "--sequential_scale", str(self.sequential_scale),
         ]
+        if self.spec_decoding:
+            cmd.append("--spec_decoding")
+            cmd.append(f"--speculative_config={self.speculative_config}")
+            cmd.append(f"--seed={self.seed}")
+            cmd.append(f"--gpu_memory_utilization={self.gpu_memory_utilization}")
+            if self.spec_max_model_len is not None:
+                cmd.append(f"--max_model_len={self.spec_max_model_len}")
+            if self.enforce_eager:
+                cmd.append("--enforce_eager")
 
         if self.random_switch:
             cmd.append("--random_switch")
