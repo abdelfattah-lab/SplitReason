@@ -20,6 +20,7 @@ from modes.big_model_only import run_bigmodel_flow
 from modes.random_switch_flow import run_random_switch_flow
 from transformers import AutoTokenizer
 
+import json
 big_model_tokenizer = None
 
 
@@ -29,12 +30,85 @@ big_model_proc = None
 small_model_proc = None
 service_args = None   # Will hold the parsed arguments
 
+def wait_for_vllm(port: int, timeout: float = 600.0, path: str = "/health") -> bool:
+    """Poll the given vLLM server until it returns HTTP 200."""
+    url = f"http://localhost:{port}{path}"
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if requests.get(url, timeout=2).status_code == 200:   # ≤2 s socket timeout
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(1.0)  # 1 Hz polling is fine; vLLM boots in 10-120 s
+    return False
+
+def wait_for_vllm_ready(port: int, model_id, timeout: float = 600.0) -> bool:
+    """
+    Wait until the vLLM HTTP server is up **and** has finished loading at
+    least one model (checked via /v1/models).
+    """
+    chat = True
+    url = f"http://localhost:{port}/v1/" + ("chat/completions" if chat else "completions")
+    payload = (
+        # chat models
+        {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "ping, say hi! :)"}],
+            "max_tokens": 6,
+            "temperature": 0,
+            "stream": False,
+        }
+    )
+
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            r = requests.post(url, json=payload, timeout=5)
+            data = r.json()
+            if r.ok and "choices" in data:
+                print("!"*20)
+                print(f"[Service] vLLM server is ready (waiting for {model_id} at {url})")
+                print(f"Ping response was: {data}")
+                print("!"*20)
+                return True
+        except requests.RequestException:
+            # import traceback
+            # traceback.print_exc()
+            print(f"[Service] (standard err:) vLLM server gave an error (waiting for {model_id} at {url})")
+            pass
+        print(f"[Service] vLLM server not ready yet (waiting for {model_id} at {url} (Can take upto 5 minutes))")
+        time.sleep(1)
+    return False
+    # health_url  = f"http://localhost:{port}/health"
+    # models_url  = f"http://localhost:{port}/v1/models"
+    # start = time.time()
+    # while time.time() - start < timeout:
+    #     try:
+    #         # Step 1 – is the HTTP server alive?
+    #         if requests.get(health_url, timeout=2).status_code != 200:
+    #             print(f"[Service] vLLM server not ready yet (waiting for {health_url})")
+    #             time.sleep(1.0)
+    #             continue
+
+    #         # Step 2 – has the model finished loading?
+    #         r = requests.get(models_url, timeout=2)
+    #         if r.ok and r.json().get("data"):
+    #             return True
+    #     except requests.RequestException:
+    #         print(f"[Service] vLLM server not ready yet (waiting for {models_url})")
+    #         pass
+    #     time.sleep(1.0)
+    # return False
+
+
 def wait_for_server(url, timeout=600.0):
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
             r = requests.get(url)
             if r.status_code == 200:
+                import pdb; pdb.set_trace()
                 return True
         except Exception:
             pass
@@ -57,47 +131,92 @@ def approximate_token_count(text: str) -> int:
     tokens = big_model_tokenizer.encode(text, add_special_tokens=False)
     return len(tokens)
 
-def launch_big_model_vllm(big_model, port, gpu_ids):
+def _start_vllm(model_name: str, port: int, gpu_ids: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
     tp_size = len(gpu_ids.split(","))
 
-        # "--max-model-len", "16384",
-        # "--max-num-batched-tokens", "32768",
     cmd = [
-        "vllm", "serve",
-        big_model,
+        "vllm", "serve", model_name,
         "--port", str(port),
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
         "--uvicorn-log-level=warning",
         "--enable_prefix_caching",
-        "--enable-chunked-prefill"
+        "--enable-chunked-prefill",
     ]
-    print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
     return subprocess.Popen(cmd, env=env)
+
+
+def _launch_blocking(model_name: str, port: int, gpu_ids: str,
+                     timeout: float = 600.0, poll: float = 5.0) -> subprocess.Popen:
+    """Start vLLM and block until it answers a ping or timeout expires."""
+    proc = _start_vllm(model_name, port, gpu_ids)
+    print(f"[Service] Launching {model_name} on :{port} (GPUs={gpu_ids}) …")
+
+    elapsed = 0.0
+    while elapsed < timeout:
+        if wait_for_vllm_ready(port, model_name, timeout=poll):
+            print(f"[Service] {model_name} on :{port} is ready! ✅")
+            return proc
+        elapsed += poll
+        print(f"[Service] ... still waiting for {model_name} on :{port}\t({int(elapsed)} s/{int(timeout)} s)")
+
+    proc.terminate()
+    proc.wait()
+    raise RuntimeError(
+        f"[Service] {model_name} on :{port} did not become ready within {timeout} s"
+    )
+
+
+def launch_big_model_vllm(big_model, port, gpu_ids):
+    return _launch_blocking(big_model, port, gpu_ids)
+
 
 def launch_small_model(model_name, port, gpu_ids):
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = gpu_ids
-    tp_size = len(gpu_ids.split(","))
+    return _launch_blocking(model_name, port, gpu_ids)
+# def launch_big_model_vllm(big_model, port, gpu_ids):
+#     env = os.environ.copy()
+#     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
+#     tp_size = len(gpu_ids.split(","))
 
-        # "--max-num-batched-tokens", "32768",
-        # "--max-model-len", "16384",
-    cmd = [
-        "vllm", "serve",
-        model_name,
-        "--port", str(port),
-        "--trust-remote-code",
-        "--tensor-parallel-size", str(tp_size),
-        "--max-model-len", "32768",
-        "--uvicorn-log-level=warning",
-        "--enable_prefix_caching",
-        "--enable-chunked-prefill"
-    ]
-    print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
-    return subprocess.Popen(cmd, env=env)
+#         # "--max-model-len", "16384",
+#         # "--max-num-batched-tokens", "32768",
+#     cmd = [
+#         "vllm", "serve",
+#         big_model,
+#         "--port", str(port),
+#         "--trust-remote-code",
+#         "--tensor-parallel-size", str(tp_size),
+#         "--max-model-len", "32768",
+#         "--uvicorn-log-level=warning",
+#         "--enable_prefix_caching",
+#         "--enable-chunked-prefill"
+#     ]
+#     print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
+#     return subprocess.Popen(cmd, env=env)
+
+# def launch_small_model(model_name, port, gpu_ids):
+#     env = os.environ.copy()
+#     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
+#     tp_size = len(gpu_ids.split(","))
+
+#         # "--max-num-batched-tokens", "32768",
+#         # "--max-model-len", "16384",
+#     cmd = [
+#         "vllm", "serve",
+#         model_name,
+#         "--port", str(port),
+#         "--trust-remote-code",
+#         "--tensor-parallel-size", str(tp_size),
+#         "--max-model-len", "32768",
+#         "--uvicorn-log-level=warning",
+#         "--enable_prefix_caching",
+#         "--enable-chunked-prefill"
+#     ]
+#     print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
+#     return subprocess.Popen(cmd, env=env)
 
 def batched_generate_text_vllm(
     prompts: List[str], 
@@ -169,7 +288,25 @@ def batched_generate_text_vllm(
         avg_latency = total_latency / max(1, len(prompts))
 
         return results, avg_latency
-    except:
+    except Exception as e:
+        # ── maximal loud explosion ───────────────────────────────
+        print("\n===== ☠️  batched_generate_text_vllm CRASHED ☠️ =====", file=sys.stderr, flush=True)
+        print(f"URL: {url}", file=sys.stderr)
+        print("Payload (truncated to 4 KB):", file=sys.stderr)
+        print(json.dumps(payload, indent=2)[:4096], file=sys.stderr)
+        if 'resp' in locals():
+            print(f"HTTP status: {getattr(resp, 'status_code', 'N/A')}", file=sys.stderr)
+            print("Response body (first 4 KB):", file=sys.stderr)
+            try:
+                print(resp.text[:4096], file=sys.stderr)
+            except Exception:
+                pass
+        print("\nTraceback:", file=sys.stderr)
+        import traceback
+        traceback.print_exc()                      # full stack trace
+        print("=====================================================\n", file=sys.stderr, flush=True)
+        exit(0)
+        # re-raise so callers can handle/abort
         return None, None
 
 def batched_generate_text_with_tokens_vllm(
@@ -366,12 +503,27 @@ def shutdown():
     threading.Thread(target=stop_server).start()
     return "Shutting down..."
 
+
+
+ready_event = threading.Event()
+
 @app.route("/ping", methods=["GET"])
 def ping():
     """
-    Simple health check endpoint to verify service is up.
+    Health-check:
+      • 200  → service + models are ready
+      • 503  → Flask is up but a model is still loading
     """
-    return jsonify({"message": "pong"}), 200
+    if ready_event.is_set():
+        return jsonify({"message": "pong"}), 200
+    return jsonify({"message": "warming-up"}), 503
+
+# @app.route("/ping", methods=["GET"])
+# def ping():
+#     """
+#     Simple health check endpoint to verify service is up.
+#     """
+#     return jsonify({"message": "pong"}), 200
 
 @app.route("/speculative_reason", methods=["POST"])
 def speculative_reason():
@@ -625,44 +777,56 @@ def main():
 
     # 1) Check if the big model is needed and launch if necessary
     if need_big_model:
-        print(f"[Service] Checking if big model server is up on port {service_args.big_model_port} ...")
-        if wait_for_server(f"http://localhost:{service_args.big_model_port}/ping", timeout=5):
-            print("[Service] Big model is already up.")
-        else:
-            big_model_proc = launch_big_model_vllm(service_args.big_model,
-                                                service_args.big_model_port,
-                                                service_args.big_model_gpus)
-            print("[Service] Waiting for big model server to be ready ...")
-            if not wait_for_server(f"http://localhost:{service_args.big_model_port}/ping"):
-                print("[Service] Big model server did not come up in time. Exiting.")
-                if big_model_proc is not None:
-                    big_model_proc.terminate()
-                sys.exit(1)
-            print("[Service] Big model server is up.")
+        big_model_proc = launch_big_model_vllm(service_args.big_model,
+                                            service_args.big_model_port,
+                                            service_args.big_model_gpus)
+        print(f"[Service] Started big model; server is up on port {service_args.big_model_port} ...")
+        # # if wait_for_server(f"http://localhost:{service_args.big_model_port}/ping", timeout=5):
+        # if wait_for_vllm_ready(service_args.big_model_port, service_args.big_model,  timeout=600):
+        #     print("[Service] Big model is already up.")
+        # else:
+        #     big_model_proc = launch_big_model_vllm(service_args.big_model,
+        #                                         service_args.big_model_port,
+        #                                         service_args.big_model_gpus)
+        #     print("[Service] Waiting for big model server to be ready ...")
+        #     if not wait_for_server(f"http://localhost:{service_args.big_model_port}/ping"):
+        #     # if not wait_for_vllm_ready(service_args.big_model_port, service_args.big_model):
+        #         print("[Service] Big model server did not come up in time. Exiting.")
+        #         if big_model_proc is not None:
+        #             big_model_proc.terminate()
+        #         sys.exit(1)
+        #     print("[Service] Big model server is up.")
     else:
         print("[Service] Big model is not needed. Skipping...")
 
     # 2) Check if small model is needed and launch if necessary
     if need_small_model:
-        print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
-        if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
-            print("[Service] Small model is already up.")
-        else:
-            small_model_proc = launch_small_model(service_args.small_model,
-                                                service_args.small_model_port,
-                                                service_args.small_model_gpus)
-            print("[Service] Waiting for small model server to be ready ...")
-            if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
-                print("[Service] Small model server did not come up in time. Exiting.")
-                if small_model_proc is not None:
-                    small_model_proc.terminate()
-                if big_model_proc is not None and need_big_model:
-                    big_model_proc.terminate()
-                sys.exit(1)
-            print("[Service] Small model server is up.")
+        small_model_proc = launch_small_model(service_args.small_model,
+                                            service_args.small_model_port,
+                                            service_args.small_model_gpus)
+        print(f"[Service] Started small model; server is up on port {service_args.small_model_port} ...")
+        # print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
+        # if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
+        # # if wait_for_vllm_ready(service_args.small_model_port, service_args.small_model, timeout=600):
+        #     print("[Service] Small model is already up.")
+        # else:
+        #     small_model_proc = launch_small_model(service_args.small_model,
+        #                                         service_args.small_model_port,
+        #                                         service_args.small_model_gpus)
+        #     print("[Service] Waiting for small model server to be ready ...")
+        #     if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
+        #     # if not wait_for_vllm_ready(service_args.small_model_port, service_args.small_model):
+        #         print("[Service] Small model server did not come up in time. Exiting.")
+        #         if small_model_proc is not None:
+        #             small_model_proc.terminate()
+        #         if big_model_proc is not None and need_big_model:
+        #             big_model_proc.terminate()
+        #         sys.exit(1)
+        #     print("[Service] Small model server is up.")
     else:
         print("[Service] Small model is not needed. Skipping...")
-
+    
+    ready_event.set()
     # 3) Start our Flask app
     try:
         app.run(host="0.0.0.0", port=service_args.port)

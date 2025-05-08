@@ -1,3 +1,4 @@
+
 """
 Example: Custom vllm_speculative Model in lm-evaluation-harness
 
@@ -129,6 +130,7 @@ class SpeculativeVLLM(TemplateLM):
 
         # kill_cmd = "fuser -k -9 /dev/nvidia*"
         # subprocess.run(kill_cmd, shell=True)
+        # self.concurrency = int(kwargs.pop("concurrency", 16))
         self.service_host = speculative_reasoner_host
         self.service_port = speculative_reasoner_port
         self.service_params = coerce_all_types(kwargs)
@@ -215,9 +217,25 @@ class SpeculativeVLLM(TemplateLM):
             f"Max length: {self._max_length}, default max_gen_toks: {self._max_gen_toks}."
         )
 
+    def _server_up(self, url: str) -> bool:
+        """Return True when Flask is listening (200 or 503)."""
+        try:
+            r = requests.get(url, timeout=3)
+            return r.status_code in (200, 503)
+        except Exception:
+            return False
+
+
+    def _server_ready(self, url: str) -> bool:
+        """Return True only when the models are ready (200)."""
+        try:
+            return requests.get(url, timeout=3).status_code == 200
+        except Exception:
+            return False
+
     def _ensure_correct_service_is_running(self):
         ping_url = f"http://{self.service_host}:{self.service_port}/ping"
-        if self._ping_service(ping_url):
+        if self._server_up(ping_url):
             eval_logger.info(f"[SpeculativeVLLM] Service is already running; attempting shutdown.")
             
             # Attempt a graceful shutdown via /shutdown
@@ -229,7 +247,7 @@ class SpeculativeVLLM(TemplateLM):
             
             # Wait for it to actually stop responding
             start_time = time.time()
-            while self._ping_service(ping_url):
+            while self._server_up(ping_url):        # wait until the old one dies
                 if time.time() - start_time > 30:
                     raise RuntimeError("[SpeculativeVLLM] Could not shut down the service within 30s; exiting.")
                 time.sleep(1)
@@ -306,7 +324,7 @@ class SpeculativeVLLM(TemplateLM):
         start_time = time.time()
         timeout = 600
         while time.time() - start_time < timeout:
-            if self._ping_service(ping_url):
+            if self._server_ready(ping_url):        # <- ready now
                 eval_logger.info("[SpeculativeVLLM] Service started successfully.")
                 return
             if self.service_proc.poll() is not None:
@@ -430,7 +448,8 @@ class SpeculativeVLLM(TemplateLM):
 
             # Submit all requests in parallel:
             futures = []
-            with ThreadPoolExecutor(max_workers=8) as executor:
+            # with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
+            with ThreadPoolExecutor(max_workers=16) as executor:
                 for idx, token_ids in enumerate(encoded_prompts):
                     prompt_text = self.tokenizer.decode(token_ids)
                     # Print or track debug info:
