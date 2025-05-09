@@ -183,15 +183,15 @@ class SpeculativeVLLM(TemplateLM):
         )
         self.test_logging = self.service_params.get("test_logging", False)
 
-        self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")
-        self._ensure_correct_service_is_running()
-        big_model_name = self.service_params.get("big_model", pretrained)
+        self.service_script_path = self.service_params.get("service_script_path", "./spec_service.py")    
 
         if max_length and max_model_len:
             raise ValueError("Either max_length or max_model_len may be provided, not both.")
         self._max_length = max_model_len if max_model_len is not None else max_length
         if not self._max_length:
             self._max_length = self._DEFAULT_MAX_LENGTH
+        self._ensure_correct_service_is_running()
+        big_model_name = self.service_params.get("big_model", pretrained)
 
         self._max_gen_toks = max_gen_toks
         self.data_parallel_size = data_parallel_size
@@ -311,6 +311,9 @@ class SpeculativeVLLM(TemplateLM):
             if self.enforce_eager:
                 cmd.append("--enforce_eager")
 
+            print("max_tokens", max_tokens)
+            print("max_model_length", self.spec_max_model_len)
+            time.sleep(20)
         if self.random_switch:
             cmd.append("--random_switch")
         if self.small_first:

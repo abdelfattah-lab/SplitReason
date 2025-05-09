@@ -153,9 +153,10 @@ done
 # # # Speculative decoding text (requires a padded model)
 python -m lm_eval \
   --model vllm_speculative \
-  --model_args 'service_script_path=./spec_service.py,spec_decoding=True,speculative_config={"model":"DeepSeek-R1-Distill-Qwen-1.5B-padded"\,"num_speculative_tokens":5\,"draft_tensor_parallel_size":2},seed=42,gpu_memory_utilization=0.8,max_model_len=4096,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B,big_model_gpus=0|1,enforce_eager=True' \
+  --model_args 'service_script_path=./spec_service.py,spec_decoding=True,speculative_config={"model":"DeepSeek-R1-Distill-Qwen-1.5B-padded"\,"num_speculative_tokens":5\,"draft_tensor_parallel_size":2},seed=42,gpu_memory_utilization=0.8,max_model_len=22000,max_tokens=20000,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B,big_model_gpus=0|1,enforce_eager=True' \
   --tasks aime24_nofigures \
   --batch_size auto \
   --apply_chat_template \
   --output_path log_traces/SPEC_DEC_32B \
-  --log_samples
+  --log_samples \
+  --gen_kwargs "max_gen_toks=4096"
