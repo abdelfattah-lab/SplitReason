@@ -1,0 +1,71 @@
+tag:
+  - math_word_problems
+task: aime24_nofigures_maj8cov8
+dataset_path: simplescaling/aime24_nofigures
+dataset_name: default
+
+process_docs: !function utils.process_docs
+doc_to_text:  !function utils.doc_to_text
+doc_to_target: answer
+process_results: !function utils.process_results
+
+output_type: generate_until
+test_split: train
+
+generation_kwargs:
+  until: []
+  do_sample: false          # deterministic
+  temperature: 0
+  max_gen_toks: 32768
+
+repeats: 8                  # 8 samples per problem
+
+# one catch-all slice — utils.process_results will compute cov/maj on it
+filter_list:
+  - name: "all"
+    filter:
+      - function: "take_first_k"
+        k: 8
+
+metric_list:
+  - metric: exact_match     # plain accuracy
+    aggregation: mean
+    higher_is_better: true
+    
+  - metric: cov@2           # oracle coverage over 8
+    aggregation: mean
+    higher_is_better: true
+
+  - metric: maj@2           # majority-vote accuracy over 8
+    aggregation: mean
+    higher_is_better: true
+
+
+  - metric: cov@4           # oracle coverage over 8
+    aggregation: mean
+    higher_is_better: true
+
+  - metric: maj@4           # majority-vote accuracy over 8
+    aggregation: mean
+    higher_is_better: true
+
+
+  - metric: cov@8           # oracle coverage over 8
+    aggregation: mean
+    higher_is_better: true
+
+  - metric: maj@8           # majority-vote accuracy over 8
+    aggregation: mean
+    higher_is_better: true
+
+  # two “bypass” metrics emitted by utils.process_results
+  - metric: extracted_answers
+    aggregation: bypass
+    higher_is_better: true
+
+  - metric: exact_matches
+    aggregation: bypass
+    higher_is_better: true
+
+metadata:
+  version: 1.0

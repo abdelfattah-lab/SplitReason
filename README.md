@@ -35,6 +35,7 @@ cd ./../
 cp lm_eval_files/vllm_speculative.py lm-evaluation-harness/lm_eval/models/
 cp lm_eval_files/vllm_speculative_init.py lm-evaluation-harness/lm_eval/models/__init__.py
 cp lm_eval_files/tasks_init.py lm-evaluation-harness/lm_eval/tasks/__init__.py
+cp lm_eval_files/evaluator_utils.py lm-evaluation-harness/lm_eval/
 cp -r lm_eval_files/aime lm-evaluation-harness/lm_eval/tasks/
 cp -r lm_eval_files/openai_math lm-evaluation-harness/lm_eval/tasks/
 cp -r lm_eval_files/openai lm-evaluation-harness/lm_eval/tasks/gpqa
