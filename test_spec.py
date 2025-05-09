@@ -95,6 +95,7 @@ def main():
     parser.add_argument("--placeholder_mode", action="store_true")
     parser.add_argument("--spec_rewrite", action="store_true")
     parser.add_argument("--spec_reason_perf", action="store_true")
+    parser.add_argument("--spec_reason_perf_only", action="store_true")
     parser.add_argument("--spec_reason", action="store_true")
     parser.add_argument("--random_switch", action="store_true")
     parser.add_argument("--logprob_subselect", action="store_true")
@@ -132,11 +133,14 @@ def main():
     # python test_spec.py --test_logging  --spec_reason_perf --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8002 --small_model_port=8004
     # python test_spec.py --test_logging  --small_model_only --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8002 --small_model_port=8004
 
+    # python test_spec.py --test_logging  --spec_reason_perf_only --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+
+
     if args.max_iterations is None:
         args.max_iterations = 32768 // (args.stok * args.ltok)
     
-    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch, args.spec_reason, args.spec_reason_perf]) != 1:
-        print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, spec_reason, spec_reason_perf, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
+    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch, args.spec_reason, args.spec_reason_perf, args.spec_reason_perf_only]) != 1:
+        print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, spec_reason, spec_reason_perf, spec_reason_perf_only, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
         sys.exit(1)
 
     # kill_cmd = "fuser -k -9 /dev/nvidia*"
@@ -202,6 +206,8 @@ def main():
         cmd.append("--spec_reason")
     if args.spec_reason_perf:
         cmd.append("--spec_reason_perf")
+    if args.spec_reason_perf_only:
+        cmd.append("--spec_reason_perf_only")
     if args.big_model_only:
         cmd.append("--big_model_only")
     if args.small_model_only:
@@ -222,49 +228,50 @@ def main():
         sys.exit(1)
 
     print("[test_spec] Service is now up.")
+    for _ in range(10):
+        # Step 2: Send the question to /speculative_reason
+        url = f"http://{args.host}:{args.service_port}/speculative_reason"
+        payload = {
+            "question": args.question,
+            "thinking_n_ignore": args.thinking_n_ignore,
+            "drafting_n": args.drafting_n,
+            "full_rewrite": args.full_rewrite,
+            "random_switch": args.random_switch,
+            "small_first": args.small_first,
+            "placeholder_mode": args.placeholder_mode,
+            "logprob_subselect": args.logprob_subselect,
+            "spec_rewrite": args.spec_rewrite,
+            "spec_reason": args.spec_reason,
+            "spec_reason_perf": args.spec_reason_perf,
+            "spec_reason_perf_only": args.spec_reason_perf_only,
+            "big_model_only": args.big_model_only,
+            "small_model_only": args.small_model_only,
+            "switch_ratio": args.switch_ratio,
+            "switch_chunk": args.switch_chunk,
+            "sgen": args.sgen,
+            "stok": args.stok,
+            "sdecay": args.sdecay,
+            "ltok": args.ltok,
+            "lbound": args.lbound,
+            "max_iterations": args.max_iterations,
+            "bloat_tokens": args.bloat_tokens,
+            "max_tokens": args.max_tokens,
+            "terminating_string": args.terminating_string,
+            "test_logging": args.test_logging,
+            "draft_propose_ignore_str": args.draft_propose_ignore_str,
+            "sequential_scale": args.sequential_scale,
+        }
+        print(f"[test_spec] Sending request with payload = {payload} to url = {url}")
+        resp = requests.post(url, json=payload)
+        resp.raise_for_status()
+        resp_json = resp.json()
 
-    # Step 2: Send the question to /speculative_reason
-    url = f"http://{args.host}:{args.service_port}/speculative_reason"
-    payload = {
-        "question": args.question,
-        "thinking_n_ignore": args.thinking_n_ignore,
-        "drafting_n": args.drafting_n,
-        "full_rewrite": args.full_rewrite,
-        "random_switch": args.random_switch,
-        "small_first": args.small_first,
-        "placeholder_mode": args.placeholder_mode,
-        "logprob_subselect": args.logprob_subselect,
-        "spec_rewrite": args.spec_rewrite,
-        "spec_reason": args.spec_reason,
-        "spec_reason_perf": args.spec_reason_perf,
-        "big_model_only": args.big_model_only,
-        "small_model_only": args.small_model_only,
-        "switch_ratio": args.switch_ratio,
-        "switch_chunk": args.switch_chunk,
-        "sgen": args.sgen,
-        "stok": args.stok,
-        "sdecay": args.sdecay,
-        "ltok": args.ltok,
-        "lbound": args.lbound,
-        "max_iterations": args.max_iterations,
-        "bloat_tokens": args.bloat_tokens,
-        "max_tokens": args.max_tokens,
-        "terminating_string": args.terminating_string,
-        "test_logging": args.test_logging,
-        "draft_propose_ignore_str": args.draft_propose_ignore_str,
-        "sequential_scale": args.sequential_scale,
-    }
-    print(f"[test_spec] Sending request with payload = {payload} to url = {url}")
-    resp = requests.post(url, json=payload)
-    resp.raise_for_status()
-    resp_json = resp.json()
+        final_answer = resp_json.get("final_answer", "")
+        usage_data = resp_json.get("usage_records", [])
 
-    final_answer = resp_json.get("final_answer", "")
-    usage_data = resp_json.get("usage_records", [])
-
-    # Step 3: Print the final answer
-    print("\n=== Final Answer ===")
-    print(final_answer)
+        # Step 3: Print the final answer
+        print("\n=== Final Answer ===")
+        print(final_answer)
 
     # Step 4: Print usage data
     print_usage_table(usage_data)

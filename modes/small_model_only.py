@@ -6,6 +6,8 @@ import datetime
 import time 
 import uuid
 
+benchfile = "specR_small.csv"
+
 def sanitize_question(question: str) -> str:
     terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
     for term in terms_to_remove:
@@ -72,6 +74,7 @@ def run_smallmodel_flow(
             port=small_model_port,
             temperature=temperature,
             max_tokens=16384,
+            # max_tokens=512,
             model=small_model
         )
         usage_dict = resp_json.get("usage", {})
@@ -94,10 +97,10 @@ def run_smallmodel_flow(
     total_tokens = token_counter(final_reply_small) if token_counter else len(final_reply_small.split())
     time_per_tok = total_time / total_tokens if total_tokens > 0 else 0
     uuid_ = str(uuid.uuid4())
-    if not os.path.exists("small_model_benchmarks.csv"):
-        with open("small_model_benchmarks.csv", "w") as f:
+    if not os.path.exists(benchfile):
+        with open(benchfile, "w") as f:
             f.write("uuid,small_model,sequential_scale,total_tokens,total_time,time_per_tok\n")
-    with open("small_model_benchmarks.csv", "a") as f:
+    with open(benchfile, "a") as f:
         f.write(f"{uuid_},{small_model},{sequential_scale},{total_tokens},{total_time},{time_per_tok}\n")
 
     return final_reply_small, usage_data

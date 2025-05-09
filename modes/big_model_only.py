@@ -7,6 +7,8 @@ import datetime
 import time 
 import uuid
 
+benchfile = "specR_big.csv"
+
 def sanitize_question(question: str) -> str:
     terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
     for term in terms_to_remove:
@@ -89,9 +91,9 @@ def run_bigmodel_flow(
     total_tokens = token_counter(final_reply) if token_counter else len(final_reply.split())
     time_per_tok = total_time / total_tokens if total_tokens > 0 else 0
     uuid_ = str(uuid.uuid4())
-    if not os.path.exists("big_model_benchmarks.csv"):
-        with open("big_model_benchmarks.csv", "w") as f:
+    if not os.path.exists(benchfile):
+        with open(benchfile, "w") as f:
             f.write("uuid,big_model,sequential_scale,total_tokens,total_time,time_per_tok\n")
-    with open("big_model_benchmarks.csv", "a") as f:
+    with open(benchfile, "a") as f:
         f.write(f"{uuid_},{big_model},{sequential_scale},{total_tokens},{total_time},{time_per_tok}\n")
     return final_reply, usage_data

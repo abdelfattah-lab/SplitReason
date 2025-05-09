@@ -34,7 +34,9 @@ def main():
     # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/APR20_SPECR_FULLTRAINGRPO_8B/meta-llama__Llama-2-7b-chat-hf"
     # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B/meta-llama__Llama-2-7b-chat-hf"
     # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_7B_Qwen/meta-llama__Llama-2-7b-chat-hf"
-    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/DEBUGGING_SPECR_8B/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/DEBUGGING_SPECR_8B/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B_8Aug/meta-llama__Llama-2-7b-chat-hf"
+    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B_8Aug/meta-llama__Llama-2-7b-chat-hf"
     # list all files with prefix samples_
     print(f"Investigating json files in {json_folder}")
     # Check if json_folder is a folder or file
@@ -103,7 +105,8 @@ def main():
         plt.clf()
         plt.close()
         # print(sorted(coverage_list))
-        print(coverage_list[:10])
+        # print(coverage_list[:10])
+        print(f"File: {json_file}")
         median_coverage = np.median(coverage_list)
         print(f"Median coverage: {median_coverage}\t Average coverage: {sum(coverage_list) / len(coverage_list):.2f}% \t std: {np.std(coverage_list):.2f}% \t min: {min(coverage_list):.2f}%\t max: {max(coverage_list):.2f}%")
 

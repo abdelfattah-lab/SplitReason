@@ -225,7 +225,7 @@ async def _run_speculative_async(
     # ――― bookkeeping ―――
     tot = time.time() - start
     ntok = tok_counter(cur)
-    csv = "speculative_reasoning_benchmarks_curr.csv"
+    csv = "specR_profiling.csv"
     if not os.path.exists(csv):
         with open(csv, "w") as f:
             f.write("uuid,small_model,big_model,total_tokens,total_time,time_per_tok\n")
@@ -235,7 +235,7 @@ async def _run_speculative_async(
     return cur, usage
 
 # ── public blocking wrapper ──────────────────────────────────────────
-def run_speculative_reasoning_flow_perf(
+def run_speculative_reasoning_flow_perf_only(
     question: str,
     sgen: int,
     stok: int,

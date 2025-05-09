@@ -1,70 +1,55 @@
-# modes/spec_rewrite_perf.py
 """
-Ultra-pipelined speculative-reasoning driver (bug-fixed).
+Ultra-pipelined speculative-reasoning driver (bug‑fixed + trace logging).
 
-Only change vs previous version:
-* The async token streamer _stream_big() no longer tries to `return`.
-  Instead the caller deduces finish_reason from how many tokens arrived.
+Changes versus previous version:
+* Added fine‑grained event tracing.  Every meaningful step during decoding
+  is timestamped and later flushed to ``decode_trace/{run_id}.csv`` so we can
+  visualize who (big/small model, prefill jobs, etc.) did what and when.
+* Re‑used the same ``run_id`` for both benchmark and trace files so results
+  correlate trivially.
+* Minor refactors to keep the public API intact.
 """
 
 from __future__ import annotations
 
-import asyncio, datetime as _dt, json, os, time, traceback, uuid
+import asyncio, csv, datetime as _dt, json, os, sys, time, traceback, uuid
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
-import json
 import httpx
 
 # ── constants ────────────────────────────────────────────────────────
 SMALL_CHUNK      = 64
 STREAM_BUCKET    = 8
 NUM_PROBE_TOKENS = 6
-# MAX_TOTAL_TOKENS = 512
-MAX_TOTAL_TOKENS = 16384
+MAX_TOTAL_TOKENS = 16_384
 MAX_BIG_SEGMENT  = 128
 BIG_CHUNK_CAP    = 32
 
 BIG_OPEN  = "<bigmodel>"
 BIG_CLOSE = "</bigmodel>"
 
+DECODE_TRACE_DIR = "decode_trace"  # ← new — where timestamped events go
+
 # ── helpers ──────────────────────────────────────────────────────────
 async def _async_call(fn, *args, **kw):
     return await asyncio.to_thread(fn, *args, **kw)
 
-import traceback
-import sys
-
 async def _safe_gen_small(batched_generate_text_vllm, *args, **kw):
-    """
-    Call batched_generate_text_vllm inside a worker-thread.
-    If it fails, dump the entire traceback (from that thread)
-    to stderr, then re-raise so the outer coroutine stops.
-    """
+    """Wrap small‑model call so we dump its traceback if it blows up."""
     try:
         return await _async_call(batched_generate_text_vllm, *args, **kw)
     except Exception as e:
-        # format_exc() captures the traceback of the exception in this context
-        tb = traceback.format_exc()
         print("\n=== small model call failed ===", file=sys.stderr)
-        print(tb, file=sys.stderr, flush=True)
-        raise RuntimeError(f"small-model call failed: {e}") from e
-
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
+        raise RuntimeError(f"small‑model call failed: {e}") from e
 
 async def _prefill_other(prompt, port, model, temperature, req_lib, gen_fn):
+    """Stub for the prefill RPC to the *other* model (big⇄small)."""
     return {"choices": [{"text": ""}]}
-    # await _async_call(
-    #     gen_fn,
-    #     prompts=[prompt],
-    #     port=port,
-    #     temperature=temperature,
-    #     max_tokens=1,
-    #     model=model,
-    #     requests=req_lib,
-    # )
-
 
 async def _stream_big(prompt: str, *, port: int, model: str,
                       temperature: float, client: httpx.AsyncClient):
-    """Async generator that yields one token at a time."""
+    """Async generator that yields *one* token at a time from the big model."""
     url = f"http://localhost:{port}/v1/completions"
     payload = {
         "model": model,
@@ -86,12 +71,17 @@ async def _stream_big(prompt: str, *, port: int, model: str,
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            try:
-                choice = obj["choices"][0]
-            except:
-                import pdb; pdb.set_trace()
+            choice = obj["choices"][0]
             yield (choice.get("delta", {}).get("content") or
                    choice.get("text", ""))
+
+# ── private util: event logging ──────────────────────────────────────
+
+def _ensure_trace_dir() -> Path:
+    """Create ``decode_trace`` directory if it doesn't exist."""
+    p = Path(DECODE_TRACE_DIR)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 # ■■■ main coroutine ■■■ ------------------------------------------------
 async def _run_speculative_async(
@@ -101,46 +91,53 @@ async def _run_speculative_async(
     test_logging, lbound, max_it, seq_scale, tok_counter
 ) -> Tuple[str, List[Dict[str, Any]]]:
 
-    def _clean(t):  # strip special markers
+    def _clean(t):  # strip special markers so the prompt is human‑readable
         for s in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
                   "<｜end▁of▁sentence｜>", "<think>"):
             t = t.replace(s, "")
         return t
+
+    # ── bookkeeping objects ──
+    run_id = uuid.uuid4()
+    trace: List[Tuple[float, str, str, str]] = []   # (elapsed, stage, action, note)
+    start_time = time.time()
+
+    def _log(stage: str, action: str, note: str = "") -> None:
+        """Append an event to the in‑memory trace."""
+        trace.append((time.time() - start_time, stage, action, note))
+        if test_logging:  # optional console spam when debugging
+            print(f"[TRACE] {trace[-1]}")
 
     big_hint = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
     cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
            f"{big_hint}\n{term_str}<｜Assistant｜>\n<think>")
 
     usage: List[Dict[str, Any]] = []
-    start = time.time()
-    stage, big_seg = "small", 0
-    done = False
+    stage, big_seg, done = "small", 0, False
     prefill_big = prefill_small = None
+
+    # ── helper wrappers that *also log* ──
+    async def _call_small(*args, **kw):
+        _log("small", "call_start", f"rem={MAX_TOTAL_TOKENS - tok_counter(cur)}")
+        out = await _safe_gen_small(*args, **kw)
+        _log("small", "call_end", "✓")
+        return out
 
     async with httpx.AsyncClient(timeout=None) as client:
         while not done:
             # ――― small model ―――
             if stage == "small":
                 if prefill_big is None or prefill_big.done():
+                    _log("prefill_big", "spawn")
                     prefill_big = asyncio.create_task(
                         _prefill_other(cur, big_port, big_model,
                                        temperature, requests, gen_small)
                     )
-                # resp, _ = await _async_call(
-                #     gen_small, prompts=[cur], port=small_port,
-                #     temperature=temperature,
-                #     max_tokens=min(SMALL_CHUNK,
-                #                    MAX_TOTAL_TOKENS - tok_counter(cur)),
-                #     model=small_model, is_bigmodel_halting=True,
-                #     requests=requests,
-                # )
-                # if resp is None:
-                #     raise RuntimeError("small-model call failed")
                 remain = MAX_TOTAL_TOKENS - tok_counter(cur)
                 if remain <= 0:
                     done = True
                     break
-                resp, _ = await _safe_gen_small(
+                resp, _ = await _call_small(
                     batched_generate_text_vllm=gen_small,
                     prompts=[cur],
                     port=small_port,
@@ -153,9 +150,11 @@ async def _run_speculative_async(
                 delta = resp[0]["choices"][0]["text"]
                 fin   = resp[0]["choices"][0]["finish_reason"]
                 cur  += delta
+                _log("small", "delta", f"{len(delta)}toks")
 
                 if BIG_OPEN in delta:
                     stage, big_seg = "big", 0
+                    _log("state", "enter_big")
                     continue
                 if fin == "stop":
                     done = True
@@ -166,9 +165,11 @@ async def _run_speculative_async(
                 if big_seg >= MAX_BIG_SEGMENT:
                     cur += BIG_CLOSE
                     stage = "small"
+                    _log("big", "max_seg_close")
                     continue
 
                 if prefill_small is None or prefill_small.done():
+                    _log("prefill_small", "spawn")
                     prefill_small = asyncio.create_task(
                         _prefill_other(cur, small_port, small_model,
                                        temperature, requests, gen_small)
@@ -187,9 +188,9 @@ async def _run_speculative_async(
                     tokens_this_stream += 1
                     big_seg += 1
                     cur += tok
+                    _log("big", "stream_tok", tok.replace("\n", "\\n")[:30])
 
                     if len(bucket) >= STREAM_BUCKET:
-                        # import pdb; pdb.set_trace()
                         prefixes = [cur[:-len("".join(bucket))] +
                                     "".join(bucket[:i])
                                     for i in range(1, len(bucket)+1)]
@@ -200,37 +201,46 @@ async def _run_speculative_async(
                         )
                         handoff = None
                         for idx in range(len(prefixes)-1, -1, -1):
-                            if probe[idx]["choices"][0]["text"].lstrip(
+                            if probe[idx]["choices"][0]["text"].lstrip(  # noqa: E501
                             ).startswith(BIG_CLOSE[:4]):
                                 handoff = idx
                                 break
                         if handoff is not None:
                             chosen = prefixes[handoff]
-                            pre = probe[handoff]["choices"][0]["text"
-                                   ].split(BIG_CLOSE, 1)[0]
+                            pre = probe[handoff]["choices"][0]["text"].split(BIG_CLOSE, 1)[0]
                             cur = chosen + pre + BIG_CLOSE
                             stage = "small"
+                            _log("handoff", "big→small")
                             break
                         bucket.clear()
 
                 # stream ended naturally
                 if stage == "small":
-                    continue      # we broke for hand-off, loop again
+                    continue      # we broke for hand‑off, loop again
 
                 # if server streamed exactly BIG_CHUNK_CAP we assume 'length'
                 if tokens_this_stream == BIG_CHUNK_CAP:
                     continue      # ask big model for next chunk
                 done = True       # else ('stop') answer finished
 
-    # ――― bookkeeping ―――
-    tot = time.time() - start
+    # ── flush trace to CSV ────────────────────────────────────────────
+    trace_dir = _ensure_trace_dir()
+    trace_path = trace_dir / f"{run_id}.csv"
+    with open(trace_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["run_id", "elapsed_sec", "stage", "action", "note"])
+        writer.writerows([[run_id, *row] for row in trace])
+
+    _log("trace", "saved", str(trace_path))
+
+    # ── final bookkeeping ────────────────────────────────────────────
+    tot = time.time() - start_time
     ntok = tok_counter(cur)
-    csv = "speculative_reasoning_benchmarks_curr.csv"
-    if not os.path.exists(csv):
-        with open(csv, "w") as f:
-            f.write("uuid,small_model,big_model,total_tokens,total_time,time_per_tok\n")
-    with open(csv, "a") as f:
-        f.write(f"{uuid.uuid4()},{small_model},{big_model},"
+    bench_path = Path("speculative_reasoning_benchmarks_curr.csv")
+    if not bench_path.exists():
+        bench_path.write_text("uuid,small_model,big_model,total_tokens,total_time,time_per_tok\n")
+    with bench_path.open("a") as f:
+        f.write(f"{run_id},{small_model},{big_model},"
                 f"{ntok},{tot:.4f},{tot/max(1,ntok):.6f}\n")
     return cur, usage
 
