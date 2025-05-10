@@ -39,6 +39,7 @@ cp lm_eval_files/evaluator_utils.py lm-evaluation-harness/lm_eval/
 cp -r lm_eval_files/aime lm-evaluation-harness/lm_eval/tasks/
 cp -r lm_eval_files/openai_math lm-evaluation-harness/lm_eval/tasks/
 cp -r lm_eval_files/openai lm-evaluation-harness/lm_eval/tasks/gpqa
+cp -r lm_eval_files/utils.py lm-evaluation-harness/lm_eval/utils.py     # for spec decoding
 
 # Install package
 cd lm-evaluation-harness
