@@ -311,8 +311,6 @@ class SpeculativeVLLM(TemplateLM):
             if self.enforce_eager:
                 cmd.append("--enforce_eager")
 
-            print("max_tokens", max_tokens)
-            print("max_model_length", self.spec_max_model_len)
             time.sleep(20)
         if self.random_switch:
             cmd.append("--random_switch")

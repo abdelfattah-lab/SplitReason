@@ -7,7 +7,7 @@ def run_speculative_decoding_flow(
     temperature: float,
     test_logging: bool = False,
 ):
-    # 1) Call the vLLM OpenAI‐compatible server
+    # NOTE: calls V0 server, since V1 does not have specdec
     resp_json, latency, metric = generate_text_vllm(
         question,
         port=big_model_port,
@@ -17,13 +17,9 @@ def run_speculative_decoding_flow(
         speculative_decoding=True # NOTE: custom parameter in generate_text_vllm
     )
 
-    print(metric)
-
-    # 2) Extract what we already had
     usage = resp_json.get("usage", {})
     final_reply = resp_json["choices"][0]["text"]
 
-    # 3) Build the same usage record
     usage_data = [{
         "Model":          big_model,
         "ThinkIter":      "spec_decoding",
@@ -38,5 +34,4 @@ def run_speculative_decoding_flow(
         "Latency":         latency,
     }]
 
-    # 5) Return the new third argument
     return final_reply, usage_data
