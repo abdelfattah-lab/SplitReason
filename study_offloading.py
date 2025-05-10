@@ -36,7 +36,8 @@ def main():
     # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_7B_Qwen/meta-llama__Llama-2-7b-chat-hf"
     # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/DEBUGGING_SPECR_8B/meta-llama__Llama-2-7b-chat-hf"
     # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B_8Aug/meta-llama__Llama-2-7b-chat-hf"
-    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B_8Aug/meta-llama__Llama-2-7b-chat-hf"
+    json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B_10Aug/meta-llama__Llama-2-7b-chat-hf"
+    # json_folder = "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_8B_8Aug/meta-llama__Llama-2-7b-chat-hf"
     # list all files with prefix samples_
     print(f"Investigating json files in {json_folder}")
     # Check if json_folder is a folder or file

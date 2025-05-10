@@ -73,7 +73,8 @@ def run_smallmodel_flow(
             prompt,
             port=small_model_port,
             temperature=temperature,
-            max_tokens=16384,
+            # max_tokens=16384,
+            max_tokens=8192,
             # max_tokens=512,
             model=small_model
         )

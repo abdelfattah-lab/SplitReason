@@ -18,7 +18,8 @@ import httpx
 SMALL_CHUNK      = 64
 STREAM_BUCKET    = 8
 NUM_PROBE_TOKENS = 6
-MAX_TOTAL_TOKENS = 512
+MAX_TOTAL_TOKENS = 8192
+# MAX_TOTAL_TOKENS = 512
 # MAX_TOTAL_TOKENS = 16384
 MAX_BIG_SEGMENT  = 128
 BIG_CHUNK_CAP    = 32
@@ -137,7 +138,7 @@ async def _run_speculative_async(
                 # if resp is None:
                 #     raise RuntimeError("small-model call failed")
                 remain = MAX_TOTAL_TOKENS - tok_counter(cur)
-                if remain <= 0:
+                if remain <= 4:
                     done = True
                     break
                 resp, _ = await _safe_gen_small(
