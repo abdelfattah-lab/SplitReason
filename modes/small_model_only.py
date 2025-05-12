@@ -52,19 +52,24 @@ def run_smallmodel_flow(
     bigmodel_str = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
     question = sanitize_question(question)
     start_time = time.time()
+    def _clean(t):  # strip special markers
+        for s in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
+                  "<｜end▁of▁sentence｜>", "<think>"):
+            t = t.replace(s, "")
+        return t
     # Scaling is 0 indexed, dont ask me why lol
     for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
             if "SpecR" in small_model:
                 prompt = (
-                    f"<｜begin▁of▁sentence｜><｜User｜>{question}\n"
+                    f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
                     f"{terminating_string} "
                     f"{bigmodel_str}"
                     f"<｜Assistant｜>\n"
                     f"{model_think_prefix}"
                 )
             else:
-                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}\n<｜Assistant｜>\n{model_think_prefix}"
+                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}{terminating_string}\n<｜Assistant｜>\n{model_think_prefix}"
 
         if test_logging:
             print("Sending request to small model")

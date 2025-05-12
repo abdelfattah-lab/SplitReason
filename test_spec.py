@@ -133,7 +133,12 @@ def main():
     # python test_spec.py --test_logging  --spec_reason_perf --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8002 --small_model_port=8004
     # python test_spec.py --test_logging  --small_model_only --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8002 --small_model_port=8004
 
-    # python test_spec.py --test_logging  --spec_reason_perf_only --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+    # python test_spec.py --test_logging  --spec_reason_perf --big_model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+    # python test_spec.py --test_logging  --small_model_only --big_model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --big_model_gpus 2 --small_model_gpus "0,1" --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+    # python test_spec.py --test_logging  --big_model_only --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B --big_model_gpus "0,2" --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+    # python test_spec.py --test_logging  --big_model_only --big_model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --big_model_gpus "0,2" --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+    # python test_spec.py --test_logging  --small_model_only --big_model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --big_model_gpus 2 --small_model_gpus "0" --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
+    # python test_spec.py --test_logging  --spec_reason_perf --big_model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --big_model_gpus 0 --small_model_gpus 1 --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner --big_model_port=8008 --small_model_port=8009 --service_port 5006
 
 
     if args.max_iterations is None:

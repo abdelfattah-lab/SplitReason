@@ -141,6 +141,7 @@ for ax, task in zip(axes, tasks):
 
         xs = sub["total_evaluation_time_seconds"].values
         ys = sub[f"{task}_maj@8"].values
+        # ys = sub[f"{task}_exact_match"].values
 
         # scatter – one marker per run
         for i, (x, y, lbl) in enumerate(zip(xs, ys, sub["label"])):
@@ -150,8 +151,8 @@ for ax, task in zip(axes, tasks):
                        label=f"{lbl} ({g_name})" if ax is axes[0] else None)
 
         # connect the points (ONE line per group)
-        ax.plot(xs, ys, color=colour, linewidth=1.8,
-                label=f"{g_name} line" if ax is axes[0] else None)
+        ax.plot(xs, ys, color=colour, linewidth=1.8, label=None)
+                # label=f"{g_name} line" if ax is axes[0] else None)
 
     ax.set_title(f"{task}", fontsize=14)
     ax.set_xlabel("Execution time (s)", fontsize=12)

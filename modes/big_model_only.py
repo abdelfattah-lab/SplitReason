@@ -51,14 +51,20 @@ def run_bigmodel_flow(
         os.makedirs(subfolder_path, exist_ok=True)
 
     start_time = time.time()
+    def _clean(t):  # strip special markers
+        for s in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
+                  "<｜end▁of▁sentence｜>", "<think>"):
+            t = t.replace(s, "")
+        return t
+
     # Scaling is 0 indexed, dont ask me why lol
-    question = sanitize_question(question)
+    # question = sanitize_question(question)
     for sequential_iter in range(sequential_scale + 1):
         if sequential_iter == 0:
             if "｜" not in question:
-                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{question}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
+                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
             else:
-                prompt = f"{question}{terminating_string}\n{model_think_prefix}"
+                prompt = f"{_clean(question)}{terminating_string}\n{model_think_prefix}"
 
         if test_logging:
             print("Sending request to big model")
