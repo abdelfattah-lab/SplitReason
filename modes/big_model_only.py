@@ -22,7 +22,7 @@ def run_bigmodel_flow(
     generate_text_vllm,
     terminating_string: str,
     max_tokens=1024,
-    temperature=0.7,
+    temperature=0.6,
     sequential_scale=0,
     test_logging: bool = False,
     token_counter=None,
@@ -57,50 +57,55 @@ def run_bigmodel_flow(
             t = t.replace(s, "")
         return t
 
-    # Scaling is 0 indexed, dont ask me why lol
-    # question = sanitize_question(question)
-    for sequential_iter in range(sequential_scale + 1):
-        if sequential_iter == 0:
-            if "｜" not in question:
-                prompt = f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}{terminating_string}<｜Assistant｜>\n{model_think_prefix}"
-            else:
-                prompt = f"{_clean(question)}{terminating_string}\n{model_think_prefix}"
+    sequential_iter = 0
+    if sequential_iter == 0:
+        big_hint = ""
+        term_str = "\n Put your final answer within \\boxed{}."
+        cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
+            f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
+        prompt = cur
+    if test_logging:
+        print("Sending request to big model")
+    resp_json, latency = generate_text_vllm(
+        prompt,
+        port=big_model_port,
+        temperature=temperature,
+        max_tokens=8192,
+        model=big_model
+    )
+    usage_dict = resp_json.get("usage", {})
+    final_reply = resp_json["choices"][0]["text"]
 
-        if test_logging:
-            print("Sending request to big model")
-        # Single big model request
-        resp_json, latency = generate_text_vllm(
-            prompt,
-            port=big_model_port,
-            temperature=temperature,
-            max_tokens=8192,
-            # max_tokens=16384,
-            model=big_model
-        )
-        usage_dict = resp_json.get("usage", {})
-        final_reply = resp_json["choices"][0]["text"]
+    usage_data.append({
+        "Model": big_model,
+        "ThinkIter": "placeholder",
+        "DraftVersion": 0,
+        "PromptTokens": usage_dict.get("prompt_tokens", 0),           # Always expect this item.
+        "CompletionTokens": usage_dict.get("completion_tokens", 0),   # Always expect this item.
+        "Latency": latency,                                           # Always expect this item.
 
-        usage_data.append({
-            "Model": big_model,
-            "ThinkIter": "placeholder",
-            "DraftVersion": 0,
-            "PromptTokens": usage_dict.get("prompt_tokens", 0),           # Always expect this item.
-            "CompletionTokens": usage_dict.get("completion_tokens", 0),   # Always expect this item.
-            "Latency": latency,                                           # Always expect this item.
+    })
 
-        })
-
-        final_reply_big = resp_json["choices"][0]["text"]
-        if sequential_scale > 0 and sequential_iter < sequential_scale - 1:
-            # Add a '\nWait' to the final_reply and over-write prompt for the next iteration
-            prompt = f"{prompt}{final_reply_big}\nWait"
+    final_reply = f"{prompt}{final_reply}"
     total_time = time.time() - start_time
     total_tokens = token_counter(final_reply) if token_counter else len(final_reply.split())
     time_per_tok = total_time / total_tokens if total_tokens > 0 else 0
     uuid_ = str(uuid.uuid4())
-    if not os.path.exists(benchfile):
-        with open(benchfile, "w") as f:
-            f.write("uuid,big_model,sequential_scale,total_tokens,total_time,time_per_tok\n")
-    with open(benchfile, "a") as f:
-        f.write(f"{uuid_},{big_model},{sequential_scale},{total_tokens},{total_time},{time_per_tok}\n")
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        if not os.path.exists(benchfile):
+            with open(benchfile, "w") as f:
+                f.write(
+                    "uuid,big_model,sequential_scale,total_tokens,"
+                    "total_time,time_per_tok,datetime\n"
+                )
+        with open(benchfile, "a") as f:
+            f.write(
+                f"{uuid_},{big_model},{sequential_scale},"
+                f"{total_tokens},{total_time},{time_per_tok},{current_time}\n"
+            )
+    except Exception as e:
+        print(f"Error writing to file: {e}")
+        print("Please check if the file path is correct and if you have write permissions.")
+        pass
     return final_reply, usage_data

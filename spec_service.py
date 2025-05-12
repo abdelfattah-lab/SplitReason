@@ -10,7 +10,7 @@ import threading
 from flask import Flask, request, jsonify
 from typing import List, Tuple, Dict, Any, Optional, Union
 
-from modes.speculative_reasoning_perf_profiling import run_speculative_reasoning_flow_perf_only
+# from modes.speculative_reasoning_perf_profiling import run_speculative_reasoning_flow_perf_only
 from modes.spec_rewrite import run_speculative_rewrite_flow
 from modes.speculative_reasoning import run_speculative_reasoning_flow
 from modes.speculative_reasoning_perf import run_speculative_reasoning_flow_perf
@@ -696,30 +696,30 @@ def speculative_reason():
             token_counter=approximate_token_count
         )
 
-    elif data.get("spec_reason_perf_only", False):
-        final_reply, usage_data = run_speculative_reasoning_flow_perf_only(
-            question=question,
-            sgen=data.get("sgen", service_args.sgen),
-            stok=data.get("stok", service_args.stok),
-            sdecay=data.get("sdecay", service_args.sdecay),
-            ltok=data.get("ltok", service_args.ltok),
-            max_tokens=max_tokens,
-            temperature=temperature,
-            big_model=service_args.big_model,
-            big_model_port=service_args.big_model_port,
-            small_model=service_args.small_model,
-            small_model_port=service_args.small_model_port,
-            requests=requests,
-            batched_generate_text_vllm=batched_generate_text_vllm,
-            batched_generate_text_with_tokens_vllm=batched_generate_text_with_tokens_vllm,
-            batched_eval_logprob_vllm=batched_eval_logprob_vllm,
-            terminating_string=terminating_string,
-            test_logging=test_logging,
-            lbound=data.get("lbound", service_args.lbound),
-            max_iterations=data.get("max_iterations", service_args.max_iterations),
-            sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
-            token_counter=approximate_token_count
-        )
+    # elif data.get("spec_reason_perf_only", False):
+    #     final_reply, usage_data = run_speculative_reasoning_flow_perf_only(
+    #         question=question,
+    #         sgen=data.get("sgen", service_args.sgen),
+    #         stok=data.get("stok", service_args.stok),
+    #         sdecay=data.get("sdecay", service_args.sdecay),
+    #         ltok=data.get("ltok", service_args.ltok),
+    #         max_tokens=max_tokens,
+    #         temperature=temperature,
+    #         big_model=service_args.big_model,
+    #         big_model_port=service_args.big_model_port,
+    #         small_model=service_args.small_model,
+    #         small_model_port=service_args.small_model_port,
+    #         requests=requests,
+    #         batched_generate_text_vllm=batched_generate_text_vllm,
+    #         batched_generate_text_with_tokens_vllm=batched_generate_text_with_tokens_vllm,
+    #         batched_eval_logprob_vllm=batched_eval_logprob_vllm,
+    #         terminating_string=terminating_string,
+    #         test_logging=test_logging,
+    #         lbound=data.get("lbound", service_args.lbound),
+    #         max_iterations=data.get("max_iterations", service_args.max_iterations),
+    #         sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
+    #         token_counter=approximate_token_count
+    #     )
 
     else:
         return jsonify({"error": "Invalid mode specified in JSON payload"}), 400

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio, datetime as _dt, json, os, time, traceback, uuid
 from typing import Any, Dict, List, Tuple
+import datetime
 import json
 import httpx
 
@@ -109,8 +110,9 @@ async def _run_speculative_async(
         return t
 
     big_hint = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
+    term_str = "\n Put your final answer within \\boxed{}."
     cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
-           f"{big_hint}\n{term_str}<｜Assistant｜>\n<think>")
+        f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
 
     usage: List[Dict[str, Any]] = []
     start = time.time()
@@ -222,17 +224,27 @@ async def _run_speculative_async(
                 if tokens_this_stream == BIG_CHUNK_CAP:
                     continue      # ask big model for next chunk
                 done = True       # else ('stop') answer finished
-
     # ――― bookkeeping ―――
     tot = time.time() - start
     ntok = tok_counter(cur)
     csv = "speculative_reasoning_benchmarks_curr.csv"
-    if not os.path.exists(csv):
-        with open(csv, "w") as f:
-            f.write("uuid,small_model,big_model,total_tokens,total_time,time_per_tok\n")
-    with open(csv, "a") as f:
-        f.write(f"{uuid.uuid4()},{small_model},{big_model},"
-                f"{ntok},{tot:.4f},{tot/max(1,ntok):.6f}\n")
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        if not os.path.exists(csv):
+            with open(csv, "w") as f:
+                f.write(
+                    "uuid,small_model,big_model,total_tokens,total_time,"
+                    "time_per_tok,datetime\n"      # ← added datetime
+                )
+        with open(csv, "a") as f:
+            f.write(
+                f"{uuid.uuid4()},{small_model},{big_model},"
+                f"{ntok},{tot:.4f},{tot/max(1,ntok):.6f},{now}\n"
+            )
+    except Exception as e:
+        print(f"Error writing to file: {e}")
+        print("Please check if the file path is correct and if you have write permissions.")
+        pass
     return cur, usage
 
 # ── public blocking wrapper ──────────────────────────────────────────
