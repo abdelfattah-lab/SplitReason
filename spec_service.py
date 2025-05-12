@@ -111,7 +111,6 @@ def wait_for_server(url, timeout=600.0):
         try:
             r = requests.get(url)
             if r.status_code == 200:
-                import pdb; pdb.set_trace()
                 return True
         except Exception:
             pass
@@ -889,10 +888,10 @@ def main():
     # — Pure speculative‐decoding mode —
     if service_args.spec_decoding:
         if service_args.speculative_config is None:
-            print("[Service] ERROR: --speculative_config must be provided for speculative‐decoding mode")
+            print("[Service] ERROR: --speculative_config must be provided for speculative-decoding mode")
             sys.exit(1)
 
-        print("[Service] Starting speculative‑decoding mode …")
+        print("[Service] Starting speculative-decoding mode …")
         big_model_proc = launch_spec_decoding_server(
             service_args.big_model,
             service_args.big_model_port,
