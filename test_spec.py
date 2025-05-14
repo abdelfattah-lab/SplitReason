@@ -102,6 +102,22 @@ def main():
     parser.add_argument("--big_model_only", action="store_true")
     parser.add_argument("--small_model_only", action="store_true")
     ### End Of Modes, only 1 can be true ###
+
+    ### SpeculativeDecoding Args ###
+    parser.add_argument("--spec_decoding", action="store_true",
+                        help="Use the speculative‐decoding mode in spec_service.py")
+    parser.add_argument("--speculative_config", type=str, default=None,
+                        help="JSON string to pass as --speculative_config to the server")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="--seed for the speculative‐decoding server")
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9,
+                        help="--gpu_memory_utilization for the speculative‐decoding server")
+    parser.add_argument("--max_model_len", type=int, default=4096,
+                        help="--max_model_len for the speculative‐decoding server")
+    parser.add_argument("--enforce_eager", action="store_true",
+                        help="Pass --enforce-eager to the speculative‐decoding server")
+    ### End Of SpecDec Args ###
+
     ### LogProb Subselect Args ###
     parser.add_argument("--sgen", type=int, default=256)
     parser.add_argument("--stok", type=int, default=16)
@@ -144,7 +160,7 @@ def main():
     if args.max_iterations is None:
         args.max_iterations = 32768 // (args.stok * args.ltok)
     
-    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch, args.spec_reason, args.spec_reason_perf, args.spec_reason_perf_only]) != 1:
+    if sum([args.placeholder_mode, args.spec_rewrite, args.logprob_subselect, args.big_model_only, args.small_model_only, args.random_switch, args.spec_reason, args.spec_reason_perf, args.spec_reason_perf_only, args.spec_decoding]) != 1:
         print("[test_spec] Exactly one of placeholder_mode, spec_rewrite, spec_reason, spec_reason_perf, spec_reason_perf_only, logprob_subselect, big_model_only, small_model_only, random_switch should be True.")
         sys.exit(1)
 
