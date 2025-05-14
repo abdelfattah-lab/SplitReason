@@ -15,7 +15,7 @@ test_split: train
 generation_kwargs:
   until: []
   do_sample: false          # deterministic
-  temperature: 0
+  temperature: 0.6
   max_gen_toks: 32768
 
 repeats: 8                  # 8 samples per problem

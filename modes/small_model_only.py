@@ -8,12 +8,6 @@ import uuid
 
 benchfile = "specR_small.csv"
 
-def sanitize_question(question: str) -> str:
-    terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
-    for term in terms_to_remove:
-        question = question.replace(term, "")
-    return question
-
 def run_smallmodel_flow(
     question,
     small_model,
@@ -35,38 +29,23 @@ def run_smallmodel_flow(
     model_think_prefix = "<think>\n"
     model_think_suffix = "</think>"
 
-    if test_logging:
-        draft_logs = "small_model_draft_logs"
-        if not os.path.exists(draft_logs):
-            os.makedirs(draft_logs)
-
-        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
-        with open(f"{draft_logs}/arg_list_{timestamp}.txt", "w") as f:
-            for name, value in locals().items():
-                f.write(f"{name} = {value}\n")
-
-        subfolder_path = f"{draft_logs}/{timestamp}"
-        os.makedirs(subfolder_path, exist_ok=True)
-
     bigmodel_str = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
-    question = sanitize_question(question)
     start_time = time.time()
-    def _clean(t):  # strip special markers
+    def _clean(t):
         for s in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
                   "<｜end▁of▁sentence｜>", "<think>"):
             t = t.replace(s, "")
         return t
 
-    sequential_iter = 0
+    sequential_iter = 0 # Remove sequential-iter support
     if sequential_iter == 0:
         big_hint = ""
         term_str = "\n Put your final answer within \\boxed{}."
         cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
             f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
         prompt = cur
-    if test_logging:
-        print("Sending request to small model")
+    
+        # prompt[:len(prompt)//2],
     resp_json, latency = generate_text_vllm(
         prompt,
         port=small_model_port,
@@ -74,19 +53,8 @@ def run_smallmodel_flow(
         max_tokens=8192,
         model=small_model
     )
-    usage_dict = resp_json.get("usage", {})
     final_reply = resp_json["choices"][0]["text"]
-    usage_data.append({
-        "Model": small_model,
-        "ThinkIter": "placeholder",
-        "DraftVersion": 0,
-        "PromptTokens": usage_dict.get("prompt_tokens", 0),           # Always expect this item.
-        "CompletionTokens": usage_dict.get("completion_tokens", 0),   # Always expect this item.
-        "Latency": latency,                                           # Always expect this item.
-
-    })
-
-    final_reply_small = f"{prompt}{final_reply}"
+    final_reply_small = f"{final_reply}"
     total_time = time.time() - start_time
     total_tokens = token_counter(final_reply_small) if token_counter else len(final_reply_small.split())
     time_per_tok = total_time / total_tokens if total_tokens > 0 else 0

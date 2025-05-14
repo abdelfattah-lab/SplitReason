@@ -136,7 +136,9 @@ def _start_vllm(model_name: str, port: int, gpu_ids: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
     tp_size = len(gpu_ids.split(","))
-
+        # "--max-model-len", "8192",
+        # "--max-model-len", "32768",
+        # "--max-model-len", "16384",
     cmd = [
         "vllm", "serve", model_name,
         "--port", str(port),
@@ -144,8 +146,8 @@ def _start_vllm(model_name: str, port: int, gpu_ids: str) -> subprocess.Popen:
         "--tensor-parallel-size", str(tp_size),
         "--max-model-len", "32768",
         "--uvicorn-log-level=warning",
-        "--enable_prefix_caching",
-        "--enable-chunked-prefill",
+        "--enable-prefix-caching",
+        "--enable-chunked-prefil"
     ]
     return subprocess.Popen(cmd, env=env)
 

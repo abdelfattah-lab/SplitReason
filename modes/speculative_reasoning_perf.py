@@ -1,12 +1,4 @@
 # modes/spec_rewrite_perf.py
-"""
-Ultra-pipelined speculative-reasoning driver (bug-fixed).
-
-Only change vs previous version:
-* The async token streamer _stream_big() no longer tries to `return`.
-  Instead the caller deduces finish_reason from how many tokens arrived.
-"""
-
 from __future__ import annotations
 
 import asyncio, datetime as _dt, json, os, time, traceback, uuid
@@ -15,20 +7,16 @@ import datetime
 import json
 import httpx
 
-# ── constants ────────────────────────────────────────────────────────
 SMALL_CHUNK      = 64
 STREAM_BUCKET    = 8
 NUM_PROBE_TOKENS = 6
 MAX_TOTAL_TOKENS = 8192
-# MAX_TOTAL_TOKENS = 512
-# MAX_TOTAL_TOKENS = 16384
 MAX_BIG_SEGMENT  = 128
 BIG_CHUNK_CAP    = 32
 
 BIG_OPEN  = "<bigmodel>"
 BIG_CLOSE = "</bigmodel>"
 
-# ── helpers ──────────────────────────────────────────────────────────
 async def _async_call(fn, *args, **kw):
     return await asyncio.to_thread(fn, *args, **kw)
 
@@ -44,13 +32,13 @@ async def _safe_gen_small(batched_generate_text_vllm, *args, **kw):
     try:
         return await _async_call(batched_generate_text_vllm, *args, **kw)
     except Exception as e:
-        # format_exc() captures the traceback of the exception in this context
         tb = traceback.format_exc()
         print("\n=== small model call failed ===", file=sys.stderr)
         print(tb, file=sys.stderr, flush=True)
         raise RuntimeError(f"small-model call failed: {e}") from e
 
 
+# Disable stream/control prefills to reduce vLLM queue overhead
 async def _prefill_other(prompt, port, model, temperature, req_lib, gen_fn):
     return {"choices": [{"text": ""}]}
     # await _async_call(
@@ -95,7 +83,6 @@ async def _stream_big(prompt: str, *, port: int, model: str,
             yield (choice.get("delta", {}).get("content") or
                    choice.get("text", ""))
 
-# ■■■ main coroutine ■■■ ------------------------------------------------
 async def _run_speculative_async(
     question, sgen, stok, sdecay, ltok, max_tokens, temperature,
     big_model, big_port, small_model, small_port,
@@ -103,7 +90,7 @@ async def _run_speculative_async(
     test_logging, lbound, max_it, seq_scale, tok_counter
 ) -> Tuple[str, List[Dict[str, Any]]]:
 
-    def _clean(t):  # strip special markers
+    def _clean(t):
         for s in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
                   "<｜end▁of▁sentence｜>", "<think>"):
             t = t.replace(s, "")
@@ -113,6 +100,7 @@ async def _run_speculative_async(
     term_str = "\n Put your final answer within \\boxed{}."
     cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
         f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
+    backup_cur = cur
 
     usage: List[Dict[str, Any]] = []
     start = time.time()
@@ -122,25 +110,14 @@ async def _run_speculative_async(
 
     async with httpx.AsyncClient(timeout=None) as client:
         while not done:
-            # ――― small model ―――
             if stage == "small":
                 if prefill_big is None or prefill_big.done():
                     prefill_big = asyncio.create_task(
                         _prefill_other(cur, big_port, big_model,
                                        temperature, requests, gen_small)
                     )
-                # resp, _ = await _async_call(
-                #     gen_small, prompts=[cur], port=small_port,
-                #     temperature=temperature,
-                #     max_tokens=min(SMALL_CHUNK,
-                #                    MAX_TOTAL_TOKENS - tok_counter(cur)),
-                #     model=small_model, is_bigmodel_halting=True,
-                #     requests=requests,
-                # )
-                # if resp is None:
-                #     raise RuntimeError("small-model call failed")
                 remain = MAX_TOTAL_TOKENS - tok_counter(cur)
-                if remain <= 4:
+                if remain <= 4: # Rough boundary to avoid infinite loop
                     done = True
                     break
                 resp, _ = await _safe_gen_small(
@@ -164,7 +141,6 @@ async def _run_speculative_async(
                     done = True
                 continue
 
-            # ――― big model (stream) ―――
             if stage == "big":
                 if big_seg >= MAX_BIG_SEGMENT:
                     cur += BIG_CLOSE
@@ -192,7 +168,6 @@ async def _run_speculative_async(
                     cur += tok
 
                     if len(bucket) >= STREAM_BUCKET:
-                        # import pdb; pdb.set_trace()
                         prefixes = [cur[:-len("".join(bucket))] +
                                     "".join(bucket[:i])
                                     for i in range(1, len(bucket)+1)]
@@ -218,13 +193,13 @@ async def _run_speculative_async(
 
                 # stream ended naturally
                 if stage == "small":
-                    continue      # we broke for hand-off, loop again
+                    continue
 
                 # if server streamed exactly BIG_CHUNK_CAP we assume 'length'
                 if tokens_this_stream == BIG_CHUNK_CAP:
-                    continue      # ask big model for next chunk
-                done = True       # else ('stop') answer finished
-    # ――― bookkeeping ―――
+                    continue
+                done = True
+
     tot = time.time() - start
     ntok = tok_counter(cur)
     csv = "speculative_reasoning_benchmarks_curr.csv"
@@ -245,9 +220,9 @@ async def _run_speculative_async(
         print(f"Error writing to file: {e}")
         print("Please check if the file path is correct and if you have write permissions.")
         pass
+    cur = cur.replace(backup_cur, "") # remove input prompt to simplify \boxed{} processing
     return cur, usage
 
-# ── public blocking wrapper ──────────────────────────────────────────
 def run_speculative_reasoning_flow_perf(
     question: str,
     sgen: int,
@@ -269,7 +244,7 @@ def run_speculative_reasoning_flow_perf(
     lbound: int = 2,
     max_iterations: int = 100,
     sequential_scale=0,
-    token_counter=len,  # default fallback
+    token_counter=len,
 ):
     try:
         return asyncio.run(
@@ -287,8 +262,8 @@ def run_speculative_reasoning_flow_perf(
                 small_port            = small_model_port,
                 requests              = requests,
                 gen_small             = batched_generate_text_vllm,
-                _                     = batched_eval_logprob_vllm,          # unused inside
-                __                    = batched_generate_text_with_tokens_vllm,  # unused inside
+                _                     = batched_eval_logprob_vllm,
+                __                    = batched_generate_text_with_tokens_vllm,
                 term_str              = terminating_string,
                 test_logging          = test_logging,
                 lbound                = lbound,
@@ -297,6 +272,6 @@ def run_speculative_reasoning_flow_perf(
                 tok_counter           = token_counter,
             )
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         traceback.print_exc()
         return f"[ERROR] {e}", []
