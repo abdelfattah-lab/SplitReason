@@ -2,7 +2,8 @@
 
 ### Update: We have moved away from s1's AIME24 evaluation code, as it contains bugs that interacted with our prompts which inflated accuracies. Since then, we have ported our evaluation to adapt **lighteval**, while our method still delivers a pareto-front; we need to update our results with pass@1 for a larger number of trials. Please stay tuned for an update on this as well as End-To-End GRPO formulation on SplitReason! If you would like to reproduce old results, please revert to commit `33e455af142a38f8e7f8f0dcd37b5e18c674db1b`. 
 
-## Note: We are in the process of refactoring our code to change 'Speculative' to 'Split' to better align with the proposed methodology. The code still works as expected, and both Speculative / Split - named models are on huggingface.
+
+Note: We are in the process of refactoring our code to change 'Speculative' to 'Split' to better align with the proposed methodology. The code still works as expected, and both Speculative / Split - named models are on huggingface.
 
 ![basic-image-describing-one-possible-reasoning-composition](./figs/accuracy_to_latency_teaser_main.png)
 <!-- ![alt text](image.png) -->
