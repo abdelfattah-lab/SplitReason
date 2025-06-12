@@ -21,10 +21,15 @@ python3 ./spec_service.py \
   --port 5002
 
 # Foreground Training for GRPO
-CUDA_VISIBLE_DEVICES=2,3,4,5 ACCELERATE_LOG_LEVEL=info \
-    accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes 4 \
+CUDA_VISIBLE_DEVICES=2,3 ACCELERATE_LOG_LEVEL=info \
+    accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes 2 \
     src/open_r1/grpo.py --config recipes/DeepSeek-R1-Distill-Qwen-1.5B/grpo/config_demo.yaml \
-    --wandb_project SpeculativeReasoning --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1-220K
+    --wandb_project SpeculativeReasoning --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1_Math_SpecR_GRPO_Mini-H100
+
+# CUDA_VISIBLE_DEVICES=2,3,4,5 ACCELERATE_LOG_LEVEL=info \
+#     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes 4 \
+#     src/open_r1/grpo.py --config recipes/DeepSeek-R1-Distill-Qwen-1.5B/grpo/config_demo.yaml \
+#     --wandb_project SpeculativeReasoning --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1-220K
 
 
 

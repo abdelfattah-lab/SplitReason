@@ -249,7 +249,7 @@ def main():
         sys.exit(1)
 
     print("[test_spec] Service is now up.")
-    for _ in range(10):
+    for _ in range(2):
         # Step 2: Send the question to /speculative_reason
         url = f"http://{args.host}:{args.service_port}/speculative_reason"
         payload = {

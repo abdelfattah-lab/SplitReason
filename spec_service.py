@@ -327,8 +327,9 @@ def _to_openai_single(out, want_tokens=False):
     choice = {
         "index": 0,
         "text":  out.text,
-        "finish_reason": getattr(out, "finish_reason", None) or "stop",
+        "finish_reason": getattr(out, "finish_reason", None),
     }
+    print("[Service] finish_reason:", choice["finish_reason"])
     if want_tokens:
         choice["logprobs"] = {
             "tokens":            out.tokens,
@@ -360,6 +361,7 @@ def generate_text_vllm(prompt,
             temperature = temperature,
             max_tokens  = max_tokens,
             stop        = stop,
+            include_stop_str_in_output = True,
         )
         t0 = time.time()
         out = SMALL_LLM.generate([prompt], params)[0].outputs[0]
@@ -419,6 +421,7 @@ def batched_generate_text_vllm(prompts: List[str],
             max_tokens  = max_tokens,
             n           = 1,
             stop        = stop,
+            include_stop_str_in_output = True,
         )
         t0   = time.time()
         outs = SMALL_LLM.generate(prompts, params)
@@ -477,6 +480,7 @@ def batched_generate_text_with_tokens_vllm(prompts: List[str],
             n           = 1,
             logprobs    = logprobs,
             stop        = stop,
+            include_stop_str_in_output = True,
         )
         t0   = time.time()
         outs = SMALL_LLM.generate(prompts, params)
