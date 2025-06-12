@@ -7,9 +7,17 @@ import sys
 import requests
 import threading
 
+# from flask import Flask, request, jsonify
+import base64, numpy as np, torch
+
+import sys
+from pathlib import Path
 from flask import Flask, request, jsonify
+import torch, uuid, json
+from vllm import LLM, SamplingParams
 from typing import List, Tuple, Dict, Any, Optional, Union
 import re
+import collections
 
 # from modes.speculative_reasoning_perf_profiling import run_speculative_reasoning_flow_perf_only
 from modes.spec_rewrite import run_speculative_rewrite_flow
@@ -26,9 +34,17 @@ from transformers import AutoTokenizer
 import json
 big_model_tokenizer = None
 
+from pathlib import Path
+env = os.environ.copy()
+
+# add the directory that contains weight_sync_ext/ to PYTHONPATH
+project_root = Path(__file__).resolve().parent
+env["PYTHONPATH"] = f"{project_root}:{env.get('PYTHONPATH', '')}"
+
 
 app = Flask(__name__)
-
+SMALL_LLM          = None   # vllm.LLM object (small model)
+SMALL_MODEL_RUNNER = None   # its ModelRunner – we need it for load_weights()
 big_model_proc = None
 small_model_proc = None
 service_args = None   # Will hold the parsed arguments
@@ -53,56 +69,32 @@ def wait_for_vllm_ready(port: int, model_id, timeout: float = 600.0) -> bool:
     """
     chat = True
     url = f"http://localhost:{port}/v1/" + ("chat/completions" if chat else "completions")
-    payload = (
-        # chat models
-        {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "ping, say hi! :)"}],
-            "max_tokens": 6,
-            "temperature": 0,
-            "stream": False,
-        }
-    )
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 6,
+        "temperature": 0,
+        "stream": False,
+    }
 
-    start = time.time()
-    while time.time() - start < timeout:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
             r = requests.post(url, json=payload, timeout=5)
-            data = r.json()
-            if r.ok and "choices" in data:
-                print("!"*20)
-                print(f"[Service] vLLM server is ready (waiting for {model_id} at {url})")
-                print(f"Ping response was: {data}")
-                print("!"*20)
-                return True
-        except requests.RequestException:
-            # import traceback
-            # traceback.print_exc()
-            print(f"[Service] (standard err:) vLLM server gave an error (waiting for {model_id} at {url})")
-            pass
-        print(f"[Service] vLLM server not ready yet (waiting for {model_id} at {url} (Can take upto 5 minutes))")
-        time.sleep(1)
-    return False
-    # health_url  = f"http://localhost:{port}/health"
-    # models_url  = f"http://localhost:{port}/v1/models"
-    # start = time.time()
-    # while time.time() - start < timeout:
-    #     try:
-    #         # Step 1 – is the HTTP server alive?
-    #         if requests.get(health_url, timeout=2).status_code != 200:
-    #             print(f"[Service] vLLM server not ready yet (waiting for {health_url})")
-    #             time.sleep(1.0)
-    #             continue
+            r.raise_for_status()          # catch 4xx / 5xx early
+            try:
+                data = r.json()
+            except (ValueError, json.JSONDecodeError):
+                raise RuntimeError("Non-JSON response")
 
-    #         # Step 2 – has the model finished loading?
-    #         r = requests.get(models_url, timeout=2)
-    #         if r.ok and r.json().get("data"):
-    #             return True
-    #     except requests.RequestException:
-    #         print(f"[Service] vLLM server not ready yet (waiting for {models_url})")
-    #         pass
-    #     time.sleep(1.0)
-    # return False
+            if "choices" in data:
+                print(f"[Service] vLLM is ready on {url}")
+                return True
+        except Exception as e:             # broad: network or decode
+            print(f"[Service] still waiting: {e}")
+
+        time.sleep(2)                      # calmer log
+    return False
 
 
 def wait_for_server(url, timeout=600.0):
@@ -133,30 +125,42 @@ def approximate_token_count(text: str) -> int:
     tokens = big_model_tokenizer.encode(text, add_special_tokens=False)
     return len(tokens)
 
-def _start_vllm(model_name: str, port: int, gpu_ids: str) -> subprocess.Popen:
+def _start_vllm(model_name: str, port: int, gpu_ids: str, is_small: bool) -> subprocess.Popen:
+
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
     tp_size = len(gpu_ids.split(","))
+    if is_small:
+        assert tp_size == 1, "Small model must run on a single GPU"
         # "--max-model-len", "8192",
         # "--max-model-len", "32768",
         # "--max-model-len", "16384",
-    cmd = [
-        "vllm", "serve", model_name,
+    project_root = Path(__file__).resolve().parent  # directory containing weight_sync_ext
+    env["PYTHONPATH"] = f"{project_root}:{env.get('PYTHONPATH', '')}"
+    vllm_bin = os.path.join(os.path.dirname(sys.executable), "vllm")  # …/envs/diffusedreasoner/bin/vllm
+
+    # cmd = [sys.executable, "-m", 
+        # "vllm",
+    cmd = [vllm_bin, "serve", model_name,
         "--port", str(port),
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
-        "--max-model-len", "32768",
+        "--max-model-len", "16384",
         "--uvicorn-log-level=warning",
         "--enable-prefix-caching",
-        "--enable-chunked-prefil"
+        "--enable-chunked-prefill"
     ]
+    # item_small = ["--worker-extension-cls", "weight_sync_ext.weight_sync_worker.WorkerExtension",]
+    # if is_small:
+        # cmd.extend(item_small)
     return subprocess.Popen(cmd, env=env)
 
+    # item_small = ["--worker-extension-cls", "vllm.examples.offline_inference.rlhf_utils.WorkerExtension",]
 
 def _launch_blocking(model_name: str, port: int, gpu_ids: str,
-                     timeout: float = 600.0, poll: float = 5.0) -> subprocess.Popen:
+                     timeout: float = 600.0, poll: float = 5.0, is_small=False) -> subprocess.Popen:
     """Start vLLM and block until it answers a ping or timeout expires."""
-    proc = _start_vllm(model_name, port, gpu_ids)
+    proc = _start_vllm(model_name, port, gpu_ids, is_small=is_small)
     print(f"[Service] Launching {model_name} on :{port} (GPUs={gpu_ids}) …")
 
     elapsed = 0.0
@@ -179,48 +183,7 @@ def launch_big_model_vllm(big_model, port, gpu_ids):
 
 
 def launch_small_model(model_name, port, gpu_ids):
-    return _launch_blocking(model_name, port, gpu_ids)
-# def launch_big_model_vllm(big_model, port, gpu_ids):
-#     env = os.environ.copy()
-#     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
-#     tp_size = len(gpu_ids.split(","))
-
-#         # "--max-model-len", "16384",
-#         # "--max-num-batched-tokens", "32768",
-#     cmd = [
-#         "vllm", "serve",
-#         big_model,
-#         "--port", str(port),
-#         "--trust-remote-code",
-#         "--tensor-parallel-size", str(tp_size),
-#         "--max-model-len", "32768",
-#         "--uvicorn-log-level=warning",
-#         "--enable_prefix_caching",
-#         "--enable-chunked-prefill"
-#     ]
-#     print(f"[Service] Launching big model server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
-#     return subprocess.Popen(cmd, env=env)
-
-# def launch_small_model(model_name, port, gpu_ids):
-#     env = os.environ.copy()
-#     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
-#     tp_size = len(gpu_ids.split(","))
-
-#         # "--max-num-batched-tokens", "32768",
-#         # "--max-model-len", "16384",
-#     cmd = [
-#         "vllm", "serve",
-#         model_name,
-#         "--port", str(port),
-#         "--trust-remote-code",
-#         "--tensor-parallel-size", str(tp_size),
-#         "--max-model-len", "32768",
-#         "--uvicorn-log-level=warning",
-#         "--enable_prefix_caching",
-#         "--enable-chunked-prefill"
-#     ]
-#     print(f"[Service] Launching small model (vLLM) server on port {port} using GPUs {gpu_ids} with **PrefixCaching AND ChunkedPrefill**")
-#     return subprocess.Popen(cmd, env=env)
+    return _launch_blocking(model_name, port, gpu_ids, is_small=True)
 
 def launch_spec_decoding_server(
     big_model: str,
@@ -254,160 +217,6 @@ def launch_spec_decoding_server(
     print(f"[Service] Launching speculative‑decoding server on port {port} with model {big_model}")
     return subprocess.Popen(cmd, env=env)
 
-def batched_generate_text_vllm(
-    prompts: List[str], 
-    port: int = 8000, 
-    temperature: float = 0.6, 
-    max_tokens: int = 128, 
-    model: str = "my-model", 
-    is_bigmodel_halting=False,
-    requests=None
-) -> Tuple[List[dict], float]:
-    """
-    A batched call to the vLLM HTTP server's /v1/completions endpoint.
-    - prompts: List of prompt strings (one per item).
-    - port, temperature, max_tokens, model: same as before.
-    - requests: the requests library (or a compatible mock).
-
-    Returns:
-      - A list of response JSON objects (each corresponding to an item in `prompts`).
-      - A single float indicating the average latency for the entire batch.
-    """
-    try:
-        if requests is None:
-            import requests as _requests
-            requests = _requests
-
-        url = f"http://localhost:{port}/v1/completions"
-        if is_bigmodel_halting:
-            payload = {
-                "model": model,
-                "prompt": prompts,         # pass the entire list of prompts at once
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stop": ["<bigmodel>"],
-                "include_stop_str_in_output": True,
-                "n": 1,                    # generate 1 completion per prompt
-            }
-        else:
-            payload = {
-                "model": model,
-                "prompt": prompts,         # pass the entire list of prompts at once
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "n": 1,                    # generate 1 completion per prompt
-            }
-
-        start_time = time.time()
-        resp = requests.post(url, json=payload)
-        resp.raise_for_status()
-        end_time = time.time()
-
-        resp_json = resp.json()
-
-        # The 'choices' key in vLLM is typically a flat list of size=len(prompts), each with a "text".
-        # We have to parse them carefully to associate each choice with the correct prompt index.
-        # By default, the OpenAI-compatible /v1/completions returns one choice per prompt in order.
-        # So resp_json["choices"][i] corresponds to prompts[i].
-        choices = resp_json["choices"]
-
-        # Build a list of response dicts, each containing exactly what a normal single-call would have returned.
-        # For consistency with your single-call usage, we mimic the structure:
-        # Each item will have the structure of {"choices": [ { "text": ..., ... } ]}
-        results = []
-        for i, choice in enumerate(choices):
-            results.append({
-                "choices": [choice]
-            })
-
-        total_latency = end_time - start_time
-        avg_latency = total_latency / max(1, len(prompts))
-
-        return results, avg_latency
-    except Exception as e:
-        # ── maximal loud explosion ───────────────────────────────
-        print("\n===== ☠️  batched_generate_text_vllm CRASHED ☠️ =====", file=sys.stderr, flush=True)
-        print(f"URL: {url}", file=sys.stderr)
-        print("Payload (truncated to 4 KB):", file=sys.stderr)
-        print(json.dumps(payload, indent=2)[:4096], file=sys.stderr)
-        if 'resp' in locals():
-            print(f"HTTP status: {getattr(resp, 'status_code', 'N/A')}", file=sys.stderr)
-            print("Response body (first 4 KB):", file=sys.stderr)
-            try:
-                print(resp.text[:4096], file=sys.stderr)
-            except Exception:
-                pass
-        print("\nTraceback:", file=sys.stderr)
-        import traceback
-        traceback.print_exc()                      # full stack trace
-        print("=====================================================\n", file=sys.stderr, flush=True)
-        exit(0)
-        # re-raise so callers can handle/abort
-        return None, None
-
-def batched_generate_text_with_tokens_vllm(
-    prompts: List[str], 
-    port: int = 8000, 
-    temperature: float = 0.6, 
-    max_tokens: int = 128, 
-    model: str = "my-model", 
-    requests=None,
-    is_bigmodel_halting=False,
-    logprobs: int = 1
-) -> Tuple[List[dict], List[List[str]], float]:
-    """
-    Same as batched_generate_text_vllm, but also returns list of tokens for each completion.
-    """
-    try:
-        if requests is None:
-            import requests as _requests
-            requests = _requests
-
-        url = f"http://localhost:{port}/v1/completions"
-        if is_bigmodel_halting:
-            payload = {
-                "model": model,
-                "prompt": prompts,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stop": ["<bigmodel>"],
-                "include_stop_str_in_output": True,
-                "logprobs": logprobs,
-                "n": 1,
-            }
-        else:
-            payload = {
-                "model": model,
-                "prompt": prompts,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "logprobs": logprobs,
-                "n": 1,
-            }
-
-        start_time = time.time()
-        resp = requests.post(url, json=payload)
-        resp.raise_for_status()
-        end_time = time.time()
-
-        resp_json = resp.json()
-        choices = resp_json["choices"]
-
-        results = []
-        token_lists = []
-
-        for choice in choices:
-            results.append({
-                "choices": [choice]
-            })
-            token_info = choice.get("logprobs", {})
-            tokens = token_info.get("tokens", [])
-            token_lists.append(tokens)
-
-        avg_latency = (end_time - start_time) / max(1, len(prompts))
-        return results, token_lists, avg_latency
-    except:
-        return None, None, None
 
 def batched_eval_logprob_vllm(
     text_batch: List[str],
@@ -509,52 +318,210 @@ def _get_spec_metrics(port: int, model_name: str) -> dict:
         out[key] = float(m.group(1)) if m else 0.0
     return out
 
-def generate_text_vllm(prompt, port=8000, temperature=0.6, max_tokens=128, model="my-model", 
-    is_bigmodel_halting=False, speculative_decoding=True):
-    """
-    A direct call to the vLLM HTTP server's /v1/completions endpoint.
-    """
-    url = f"http://localhost:{port}/v1/completions"
 
+# ------------------------------------------------------------
+# Local helpers for OpenAI-style output from vllm.LLM.generate
+# ------------------------------------------------------------
+def _to_openai_single(out, want_tokens=False):
+    """Convert one vLLM SequenceOutput to the OpenAI /v1/completions shape."""
+    choice = {
+        "index": 0,
+        "text":  out.text,
+        "finish_reason": getattr(out, "finish_reason", None) or "stop",
+    }
+    if want_tokens:
+        choice["logprobs"] = {
+            "tokens":            out.tokens,
+            "token_logprobs":    out.logprobs,
+            "top_logprobs":      None,
+            "text_offset":       None,
+        }
+    return {"choices": [choice]}
+
+
+# ------------------------------------------------------------
+# SINGLE prompt ­– generate_text_vllm
+# ------------------------------------------------------------
+def generate_text_vllm(prompt,
+                       port          = 8000,
+                       temperature   = 0.6,
+                       max_tokens    = 128,
+                       model         = "my-model",
+                       is_bigmodel_halting=False,
+                       speculative_decoding=False):
+    """
+    Exactly the same signature as before.
+    Falls back to HTTP unless the request is for the embedded small model.
+    """
+    # -------- local fast path ---------------------------------
+    if SMALL_LLM is not None and port == service_args.small_model_port:
+        stop = ["<bigmodel>"] if is_bigmodel_halting else None
+        params = SamplingParams(
+            temperature = temperature,
+            max_tokens  = max_tokens,
+            stop        = stop,
+        )
+        t0 = time.time()
+        out = SMALL_LLM.generate([prompt], params)[0].outputs[0]
+        latency = time.time() - t0
+        return _to_openai_single(out), latency
+
+    # -------- original HTTP path ------------------------------
+    url = f"http://localhost:{port}/v1/completions"
+    payload = {
+        "model":       model,
+        "prompt":      prompt,
+        "max_tokens":  max_tokens,
+        "temperature": temperature,
+    }
     if is_bigmodel_halting:
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stop": ["<bigmodel>"],
-            "include_stop_str_in_output": True,
-        }
-    else:
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-    
+        payload["stop"] = ["<bigmodel>"]
+        payload["include_stop_str_in_output"] = True
+
     if speculative_decoding:
         before = _get_spec_metrics(port, model)
-        print("before:", before)
-    
-    start_time = time.time()
+
+    t0   = time.time()
     resp = requests.post(url, json=payload)
-    end_time = time.time()
     resp.raise_for_status()
-    latency = end_time - start_time
+    latency = time.time() - t0
 
     if speculative_decoding:
-        after = _get_spec_metrics(port, model)
+        after   = _get_spec_metrics(port, model)
         metrics = {
-            "accepted_tokens":   after["accepted"]       - before["accepted"],
-            "draft_tokens":      after["draft"]          - before["draft"],
-            "emitted_tokens":    after["emitted"]        - before["emitted"],
-            "acceptance_rate":   after["acceptance_rate"],
-            "efficiency":        after["efficiency"],
+            "accepted_tokens": after["accepted"] - before["accepted"],
+            "draft_tokens":    after["draft"]    - before["draft"],
+            "emitted_tokens":  after["emitted"]  - before["emitted"],
+            "acceptance_rate": after["acceptance_rate"],
+            "efficiency":      after["efficiency"],
         }
         return resp.json(), latency, metrics
-    
+
     return resp.json(), latency
+
+
+# ------------------------------------------------------------
+# BATCH ­– batched_generate_text_vllm
+# ------------------------------------------------------------
+def batched_generate_text_vllm(prompts: List[str],
+                               port: int              = 8000,
+                               temperature: float     = 0.6,
+                               max_tokens: int        = 128,
+                               model: str             = "my-model",
+                               is_bigmodel_halting    = False,
+                               requests               = None) -> Tuple[List[dict], float]:
+
+    # -------- local fast path ---------------------------------
+    if SMALL_LLM is not None and port == service_args.small_model_port:
+        stop = ["<bigmodel>"] if is_bigmodel_halting else None
+        params = SamplingParams(
+            temperature = temperature,
+            max_tokens  = max_tokens,
+            n           = 1,
+            stop        = stop,
+        )
+        t0   = time.time()
+        outs = SMALL_LLM.generate(prompts, params)
+        latency = (time.time() - t0) / max(1, len(prompts))
+        results = [_to_openai_single(o.outputs[0]) for o in outs]
+        return results, latency
+
+    # -------- original HTTP path ------------------------------
+    if requests is None:
+        import requests as _requests
+        requests = _requests
+
+    url = f"http://localhost:{port}/v1/completions"
+    payload = {
+        "model":       model,
+        "prompt":      prompts,
+        "max_tokens":  max_tokens,
+        "temperature": temperature,
+        "n":           1,
+    }
+    if is_bigmodel_halting:
+        payload.update({
+            "stop": ["<bigmodel>"],
+            "include_stop_str_in_output": True,
+        })
+
+    t0   = time.time()
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    latency = (time.time() - t0) / max(1, len(prompts))
+
+    choices = resp.json()["choices"]
+    results = [{"choices": [c]} for c in choices]
+    return results, latency
+
+
+# ------------------------------------------------------------
+# BATCH + TOKENS ­– batched_generate_text_with_tokens_vllm
+# ------------------------------------------------------------
+def batched_generate_text_with_tokens_vllm(prompts: List[str],
+                                           port: int              = 8000,
+                                           temperature: float     = 0.6,
+                                           max_tokens: int        = 128,
+                                           model: str             = "my-model",
+                                           requests               = None,
+                                           is_bigmodel_halting    = False,
+                                           logprobs: int          = 1
+                                           ) -> Tuple[List[dict], List[List[str]], float]:
+
+    # -------- local fast path ---------------------------------
+    if SMALL_LLM is not None and port == service_args.small_model_port:
+        stop = ["<bigmodel>"] if is_bigmodel_halting else None
+        params = SamplingParams(
+            temperature = temperature,
+            max_tokens  = max_tokens,
+            n           = 1,
+            logprobs    = logprobs,
+            stop        = stop,
+        )
+        t0   = time.time()
+        outs = SMALL_LLM.generate(prompts, params)
+        latency = (time.time() - t0) / max(1, len(prompts))
+
+        results     = []
+        tokens_list = []
+        tok = SMALL_LLM.get_tokenizer()      # available on recent vLLM
+        for o in outs:
+            seq = o.outputs[0]
+            results.append(_to_openai_single(seq, want_tokens=True))
+            tokens_list.append(tok.convert_ids_to_tokens(seq.token_ids))
+
+        return results, tokens_list, latency
+
+    # -------- original HTTP path ------------------------------
+    if requests is None:
+        import requests as _requests
+        requests = _requests
+
+    url = f"http://localhost:{port}/v1/completions"
+    payload = {
+        "model":       model,
+        "prompt":      prompts,
+        "max_tokens":  max_tokens,
+        "temperature": temperature,
+        "logprobs":    logprobs,
+        "n":           1,
+    }
+    if is_bigmodel_halting:
+        payload.update({
+            "stop": ["<bigmodel>"],
+            "include_stop_str_in_output": True,
+        })
+
+    t0   = time.time()
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    latency = (time.time() - t0) / max(1, len(prompts))
+
+    choices = resp.json()["choices"]
+    results = [{"choices": [c]} for c in choices]
+    tokens  = [c.get("logprobs", {}).get("tokens", []) for c in choices]
+    return results, tokens, latency
+
 
 def extract_cot(raw_text, think_suffix, fallback_suffixes=()):
     """
@@ -623,7 +590,31 @@ def speculative_reason():
     switch_ratio = data.get("switch_ratio", service_args.switch_ratio)
     switch_chunk = data.get("switch_chunk", service_args.switch_chunk)
 
-    if data.get("placeholder_mode", False):
+    if data.get("spec_reason_perf", False):
+        final_reply, usage_data = run_speculative_reasoning_flow_perf(
+            question=question,
+            sgen=data.get("sgen", service_args.sgen),
+            stok=data.get("stok", service_args.stok),
+            sdecay=data.get("sdecay", service_args.sdecay),
+            ltok=data.get("ltok", service_args.ltok),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            big_model=service_args.big_model,
+            big_model_port=service_args.big_model_port,
+            small_model=service_args.small_model,
+            small_model_port=service_args.small_model_port,
+            requests=requests,
+            batched_generate_text_vllm=batched_generate_text_vllm,
+            batched_generate_text_with_tokens_vllm=batched_generate_text_with_tokens_vllm,
+            batched_eval_logprob_vllm=batched_eval_logprob_vllm,
+            terminating_string=terminating_string,
+            test_logging=test_logging,
+            lbound=data.get("lbound", service_args.lbound),
+            max_iterations=data.get("max_iterations", service_args.max_iterations),
+            sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
+            token_counter=approximate_token_count
+        )
+    elif data.get("placeholder_mode", False):
         final_reply, usage_data = run_placeholder_flow(
             question=question,
             big_model=service_args.big_model,
@@ -754,58 +745,8 @@ def speculative_reason():
             max_tokens=max_tokens,
             temperature=temperature,
             test_logging=test_logging,
+            token_counter=approximate_token_count,
         )
-
-    elif data.get("spec_reason_perf", False):
-        final_reply, usage_data = run_speculative_reasoning_flow_perf(
-            question=question,
-            sgen=data.get("sgen", service_args.sgen),
-            stok=data.get("stok", service_args.stok),
-            sdecay=data.get("sdecay", service_args.sdecay),
-            ltok=data.get("ltok", service_args.ltok),
-            max_tokens=max_tokens,
-            temperature=temperature,
-            big_model=service_args.big_model,
-            big_model_port=service_args.big_model_port,
-            small_model=service_args.small_model,
-            small_model_port=service_args.small_model_port,
-            requests=requests,
-            batched_generate_text_vllm=batched_generate_text_vllm,
-            batched_generate_text_with_tokens_vllm=batched_generate_text_with_tokens_vllm,
-            batched_eval_logprob_vllm=batched_eval_logprob_vllm,
-            terminating_string=terminating_string,
-            test_logging=test_logging,
-            lbound=data.get("lbound", service_args.lbound),
-            max_iterations=data.get("max_iterations", service_args.max_iterations),
-            sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
-            token_counter=approximate_token_count
-        )
-
-    # elif data.get("spec_reason_perf_only", False):
-    #     final_reply, usage_data = run_speculative_reasoning_flow_perf_only(
-    #         question=question,
-    #         sgen=data.get("sgen", service_args.sgen),
-    #         stok=data.get("stok", service_args.stok),
-    #         sdecay=data.get("sdecay", service_args.sdecay),
-    #         ltok=data.get("ltok", service_args.ltok),
-    #         max_tokens=max_tokens,
-    #         temperature=temperature,
-    #         big_model=service_args.big_model,
-    #         big_model_port=service_args.big_model_port,
-    #         small_model=service_args.small_model,
-    #         small_model_port=service_args.small_model_port,
-    #         requests=requests,
-    #         batched_generate_text_vllm=batched_generate_text_vllm,
-    #         batched_generate_text_with_tokens_vllm=batched_generate_text_with_tokens_vllm,
-    #         batched_eval_logprob_vllm=batched_eval_logprob_vllm,
-    #         terminating_string=terminating_string,
-    #         test_logging=test_logging,
-    #         lbound=data.get("lbound", service_args.lbound),
-    #         max_iterations=data.get("max_iterations", service_args.max_iterations),
-    #         sequential_scale=data.get("sequential_scale", service_args.sequential_scale),
-    #         token_counter=approximate_token_count
-    #     )
-
     else:
         return jsonify({"error": "Invalid mode specified in JSON payload"}), 400
 
@@ -815,7 +756,153 @@ def speculative_reason():
     }
     return jsonify(response_payload), 200
 
+# @app.route("/update_param", methods=["POST"])
+# def update_param():
+#     name  = request.form["name"]
+#     dtype = request.form["dtype"]
+#     shape = json.loads(request.form["shape"])
+#     buf   = request.files["blob"].read()
 
+#     # Send straight to the vLLM worker-extension
+#     url = f"http://localhost:{service_args.small_model_port}/worker_extension/update_weight"
+#     files = {"blob": buf}
+#     data  = dict(name=name, dtype=dtype, shape=json.dumps(shape))
+#     r = requests.post(url, data=data, files=files, timeout=600)
+#     return jsonify(r.json()), r.status_code
+
+
+# @app.route("/reset_cache", methods=["POST"])
+# def reset_cache():
+#     url = f"http://localhost:{service_args.small_model_port}/worker_extension/reset_cache"
+#     r = requests.post(url, timeout=600)
+#     return jsonify(r.json()), r.status_code
+
+# ────────────────────────────────────────────────────────────
+# helper: raw-bytes  →  torch.Tensor (on *this* GPU)
+# ────────────────────────────────────────────────────────────
+def _bytes_to_tensor(raw: bytes, dtype_str: str, shape: list[int]) -> torch.Tensor:
+    arr = np.frombuffer(raw, dtype=np.dtype(dtype_str)).reshape(shape)
+    return torch.from_numpy(arr).cuda()
+
+# ────────────────────────────────────────────────────────────
+#  POST /update_param
+# ────────────────────────────────────────────────────────────
+
+@app.route("/update_param", methods=["POST"])
+def update_param():
+    """
+    ### WARNING
+    This is VERY specific to our base 1.5B model, exercise caution!
+    """
+    if SMALL_LLM is None:
+        return jsonify(error="small model not initialised"), 503
+
+    name   = request.form["name"]
+    dtype  = request.form["dtype"]                # "float32"|...|"uint16_bfloat"
+    shape  = json.loads(request.form["shape"])
+    blob   = request.files["blob"].read()
+
+    def _swap(worker, p_name, dtype_tag, shp, raw):
+        import torch, numpy as np
+
+        model = (worker.model
+                 if hasattr(worker, "model")
+                 else worker.model_runner.model)
+
+        # ---------------- reconstruct tensor --------------------------
+        if dtype_tag == "uint16_bfloat":
+            arr = np.frombuffer(raw, dtype=np.uint16).reshape(shp)
+            t   = torch.from_numpy(arr).view(torch.bfloat16)
+        else:
+            arr = np.frombuffer(raw, dtype=np.dtype(dtype_tag)).reshape(shp)
+            t   = torch.from_numpy(arr).to(dtype_tag)
+
+        t = t.to(next(model.parameters()).device)
+        # print name and shape etc of tensor
+        print(f"[Worker {worker.rank}] Updating parameter '{p_name}' "
+              f"to shape {t.shape} and dtype {t.dtype} on GPU {t.device}")
+
+
+        # ───── map split-name → fused-name & slice ───────────────────────
+        # recognise ...self_attn.{q,k,v}_proj.(weight|bias)
+        import re
+        m = re.match(r"^(.*self_attn\.)([qkv])_proj\.(weight|bias)$", p_name)
+        if m:
+            prefix, qkv, kind = m.groups()           # e.g. ("model.layers.0.self_attn.", "q", "weight")
+            fused_name = f"{prefix}qkv_proj.{kind}"  # vLLM parameter
+            fused_param = dict(model.named_parameters())[fused_name]
+
+            hidden_size   = model.config.hidden_size        # 1536
+            head_dim      = hidden_size // model.config.num_attention_heads  # 128
+            kv_heads      = model.config.num_key_value_heads # 2
+            kv_out        = kv_heads * head_dim              # 256
+            q_slice, k_slice, v_slice = \
+                slice(0, hidden_size), \
+                slice(hidden_size, hidden_size + kv_out), \
+                slice(hidden_size + kv_out, hidden_size + 2*kv_out)
+            which = {"q": q_slice, "k": k_slice, "v": v_slice}[qkv]
+
+            # copy into slice (dim-0 for weights / same for bias)
+            with torch.no_grad():
+                fused_param.data[which, ...].copy_(t)
+            return 0   # done, skip the usual path below
+
+        # ---------- gate / up mapping ----------
+        m = re.match(r"^(.*mlp\.)(gate|up)_proj\.(weight|bias)$", p_name)
+        if m:
+            prefix, which, kind = m.groups()                 # "gate" or "up"
+            fused_name = f"{prefix}gate_up_proj.{kind}"      # vLLM name
+            fused_param = dict(model.named_parameters())[fused_name]
+
+            inter_size = model.config.intermediate_size      # 8960
+            sl = slice(0, inter_size) if which == "gate" else slice(inter_size, 2*inter_size)
+
+            with torch.no_grad():
+                fused_param.data[sl, ...].copy_(t)           # works for bias too
+            return 0
+
+        # ---------- 3) embed_tokens.weight  (handle padding) -------------
+        if p_name.endswith("embed_tokens.weight"):
+            target = dict(model.named_parameters())[p_name]
+            rows   = min(target.size(0), t.size(0))   # 151 665
+            with torch.no_grad():
+                target.data[:rows].copy_(t[:rows])    # skip padded tail
+            return 0
+
+        # ---------- 4) ordinary 1-to-1 copy (shape-aware) ----------------
+        target = dict(model.named_parameters())[p_name]
+        if target.shape == t.shape:
+            with torch.no_grad():
+                target.data.copy_(t)
+        elif target.ndim == t.ndim and target.shape[1:] == t.shape[1:]:
+            # First-dim mismatch (e.g. embedding bias) – copy the overlap
+            rows = min(target.size(0), t.size(0))
+            with torch.no_grad():
+                target.data[:rows].copy_(t[:rows])
+            print(f"   ↳ shape mismatch; copied first {rows} rows")
+        else:
+            raise ValueError(
+                f"Shape mismatch for {p_name}: target {target.shape}, incoming {t.shape}"
+            )
+        return 0
+
+    SMALL_LLM.collective_rpc(_swap, args=(name, dtype, shape, blob))
+    SMALL_LLM.reset_prefix_cache()
+    return jsonify(status="ok"), 200
+
+
+# ────────────────────────────────────────────────────────────
+#  POST /reset_cache
+# ────────────────────────────────────────────────────────────
+@app.route("/reset_cache", methods=["POST"])
+def reset_cache():
+    if SMALL_LLM is None:
+        return jsonify(error="small model not initialised"), 503
+
+    SMALL_LLM.reset_prefix_cache()
+    return jsonify(status="ok"), 200
+
+    
 
 ##############################################################################
 # Main entrypoint: parse arguments, possibly start big/small model servers
@@ -856,7 +943,7 @@ def parse_args():
     parser.add_argument("--sgen", type=int, default=8)
     parser.add_argument("--stok", type=int, default=16)
     parser.add_argument("--sdecay", type=int, default=2)
-    parser.add_argument("--ltok", type=int, default=0)
+    parser.add_argument("--ltok", type=int, default=1)
     parser.add_argument("--lbound", type=int, default=4)
     parser.add_argument("--max_iterations", type=int, default=None, help="Maximum number of iterations, closesly controls max token budget.")
     ### End Of LogProb Subselect Args ###
@@ -879,6 +966,57 @@ def parse_args():
     parser.add_argument("--port", type=int, default=5000,
                         help="Port for this speculative reasoner Flask service.")
     return parser.parse_args()
+
+def init_small_model_inproc(model_name: str, gpu_ids: str, max_len: int):
+    """
+    Launch the small vLLM model *inside* this process so that we can
+    hot‑swap weights via Python, no HTTP.
+    """
+    global SMALL_LLM, SMALL_MODEL_RUNNER
+
+    if SMALL_LLM is not None:   # already initialised
+        return
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_ids
+    tp = len(gpu_ids.split(","))
+
+    SMALL_LLM = LLM(
+        model                 = model_name,
+        tensor_parallel_size  = tp,
+        trust_remote_code     = True,
+        max_model_len         = max_len,
+        enable_prefix_caching = True,
+    )
+    # from types import MethodType
+    # # one dummy generate to force worker construction
+    # _ = SMALL_LLM.generate(["ping"], SamplingParams(max_tokens=1, temperature=0.0))
+    # def _apply_model_v1(self, func):
+    #     executor = getattr(self.llm_engine, "model_executor",
+    #                     getattr(self.llm_engine, "_executor", None))
+    #     if executor is None:
+    #         raise RuntimeError("No executor found on llm_engine")
+    #     return executor.apply_model(func)
+    # LLM.apply_model = MethodType(_apply_model_v1, LLM)    # patch class method
+
+
+    # # -------- locate the model‑runner object -----------------
+    # # V0 path:      SMALL_LLM._engine.model_runner
+    # # V1 (0.8+) :   SMALL_LLM.engine._executor._workers[0].model_runner
+    # runner = None
+    # if hasattr(SMALL_LLM, "_engine"):           # vLLM ≤ 0.7
+    #     runner = getattr(SMALL_LLM._engine, "model_runner", None)
+    # if runner is None and hasattr(SMALL_LLM, "engine"):  # vLLM ≥ 0.8
+    #     try:
+    #         worker0 = SMALL_LLM.engine._executor._workers[0]
+    #         runner  = worker0.model_runner
+    #     except Exception:
+    #         pass
+
+    # if runner is None or not hasattr(runner, "model"):
+    #     import pdb; pdb.set_trace()
+    #     raise RuntimeError("Could not locate ModelRunner – weight‑sync unsupported.")
+
+    # SMALL_MODEL_RUNNER = runner
 
 
 def main():
@@ -926,56 +1064,32 @@ def main():
     # Load tokenizer
     load_big_model_tokenizer(service_args.big_model)
 
+    # 2) Check if small model is needed and launch if necessary
+
+    if need_small_model:
+        init_small_model_inproc(
+            model_name  = service_args.small_model,
+            gpu_ids     = service_args.small_model_gpus,
+            max_len     = 16384,
+        )
+        print("[Service] Small model initialised *inside* Flask process ✅")
+    # if need_small_model:
+    #     small_model_proc = launch_small_model(service_args.small_model,
+    #                                         service_args.small_model_port,
+    #                                         service_args.small_model_gpus)
+    #     print("[Service] Small model initialised in-process ✅")
+    else:
+        print("[Service] Small model is not needed. Skipping...")
+
     # 1) Check if the big model is needed and launch if necessary
     if need_big_model:
         big_model_proc = launch_big_model_vllm(service_args.big_model,
                                             service_args.big_model_port,
                                             service_args.big_model_gpus)
         print(f"[Service] Started big model; server is up on port {service_args.big_model_port} ...")
-        # # if wait_for_server(f"http://localhost:{service_args.big_model_port}/ping", timeout=5):
-        # if wait_for_vllm_ready(service_args.big_model_port, service_args.big_model,  timeout=600):
-        #     print("[Service] Big model is already up.")
-        # else:
-        #     big_model_proc = launch_big_model_vllm(service_args.big_model,
-        #                                         service_args.big_model_port,
-        #                                         service_args.big_model_gpus)
-        #     print("[Service] Waiting for big model server to be ready ...")
-        #     if not wait_for_server(f"http://localhost:{service_args.big_model_port}/ping"):
-        #     # if not wait_for_vllm_ready(service_args.big_model_port, service_args.big_model):
-        #         print("[Service] Big model server did not come up in time. Exiting.")
-        #         if big_model_proc is not None:
-        #             big_model_proc.terminate()
-        #         sys.exit(1)
-        #     print("[Service] Big model server is up.")
     else:
         print("[Service] Big model is not needed. Skipping...")
 
-    # 2) Check if small model is needed and launch if necessary
-    if need_small_model:
-        small_model_proc = launch_small_model(service_args.small_model,
-                                            service_args.small_model_port,
-                                            service_args.small_model_gpus)
-        print(f"[Service] Started small model; server is up on port {service_args.small_model_port} ...")
-        # print(f"[Service] Checking if small model server is up on port {service_args.small_model_port} ...")
-        # if wait_for_server(f"http://localhost:{service_args.small_model_port}/ping", timeout=5):
-        # # if wait_for_vllm_ready(service_args.small_model_port, service_args.small_model, timeout=600):
-        #     print("[Service] Small model is already up.")
-        # else:
-        #     small_model_proc = launch_small_model(service_args.small_model,
-        #                                         service_args.small_model_port,
-        #                                         service_args.small_model_gpus)
-        #     print("[Service] Waiting for small model server to be ready ...")
-        #     if not wait_for_server(f"http://localhost:{service_args.small_model_port}/ping"):
-        #     # if not wait_for_vllm_ready(service_args.small_model_port, service_args.small_model):
-        #         print("[Service] Small model server did not come up in time. Exiting.")
-        #         if small_model_proc is not None:
-        #             small_model_proc.terminate()
-        #         if big_model_proc is not None and need_big_model:
-        #             big_model_proc.terminate()
-        #         sys.exit(1)
-        #     print("[Service] Small model server is up.")
-    else:
-        print("[Service] Small model is not needed. Skipping...")
     
     ready_event.set()
     # 3) Start our Flask app

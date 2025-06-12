@@ -1,3 +1,8 @@
+import time
+import asyncio, datetime as _dt, json, os, time, traceback, uuid
+from typing import Any, Dict, List, Tuple
+import datetime
+
 def run_speculative_decoding_flow(
     question: str,
     big_model: str,
@@ -6,7 +11,9 @@ def run_speculative_decoding_flow(
     max_tokens: int,
     temperature: float,
     test_logging: bool = False,
+    token_counter=None
 ):
+    start = time.time()
     # NOTE: calls V0 server, since V1 does not have specdec
     resp_json, latency, metric = generate_text_vllm(
         question,
@@ -34,4 +41,23 @@ def run_speculative_decoding_flow(
         "Latency":         latency,
     }]
 
+    tot = time.time() - start
+    csv = "specdecode_benchmark.csv"
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total_tokens = token_counter(final_reply) if token_counter else len(final_reply.split())
+    time_per_tok = tot / total_tokens if total_tokens > 0 else 0
+    try:
+        if not os.path.exists(csv):
+            with open(csv, "w") as f:
+                f.write(
+                    "uuid,big_model,total_tokens,total_time,time_per_tok,datetime\n"
+                )
+        with open(csv, "a") as f:
+            f.write(
+                f"{uuid.uuid4()},{big_model},{total_tokens},{tot},{time_per_tok},{now}\n"
+            )
+    except Exception as e:
+        print(f"Error writing to file: {e}")
+        print("Please check if the file path is correct and if you have write permissions.")
+        pass
     return final_reply, usage_data

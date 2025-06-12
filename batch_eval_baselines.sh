@@ -7,6 +7,11 @@ export PROCESSOR=gpt-4o-mini
 # export VLLM_CONFIGURE_LOGGING=1
 # export VLLM_LOGGING_CONFIG_PATH=logging_config.json
 
+python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,spec_reason_perf=True,big_model=deepseek-ai/DeepSeek-R1-Distill-Llama-8B,small_model=akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner,max_tokens=16384,big_model_gpus=0,small_model_gpus=1,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model_port=8002,small_model_port=8004,port=5002"  \
+     --tasks aime24_nofigures  --limit 30 --batch_size auto --apply_chat_template  --output_path log_traces/DEBUG_10June --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>"  
+
+
+
 
 # 10 repetitions of AIME25 No Figures, AIME 24 No Figures
 
@@ -33,12 +38,12 @@ export PROCESSOR=gpt-4o-mini
 #           --tasks aime24_nofigures,aime25_nofigures  --batch_size auto --apply_chat_template  --output_path log_traces/SMALL_ONLY_8Aug --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>"  
 # done
 
-fuser -k -9 /dev/nvidia*
-# 8B only
-for i in {1..10}; do
-     python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,big_model_only=True,big_model=deepseek-ai/DeepSeek-R1-Distill-Llama-8B,small_model=akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner,max_tokens=16384,big_model_gpus=1|2,small_model_gpus=0,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model_port=8002,small_model_port=8004,port=5002"  \
-          --tasks aime24_nofigures,aime25_nofigures  --batch_size auto --apply_chat_template  --output_path log_traces/BIG_ONLY_8Aug --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>"  
-done
+# fuser -k -9 /dev/nvidia*
+# # 8B only
+# for i in {1..10}; do
+#      python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,big_model_only=True,big_model=deepseek-ai/DeepSeek-R1-Distill-Llama-8B,small_model=akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner,max_tokens=16384,big_model_gpus=1|2,small_model_gpus=0,pretrained=meta-llama/Llama-2-7b-chat-hf,big_model_port=8002,small_model_port=8004,port=5002"  \
+#           --tasks aime24_nofigures,aime25_nofigures  --batch_size auto --apply_chat_template  --output_path log_traces/BIG_ONLY_8Aug --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>"  
+# done
 
 # fuser -k -9 /dev/nvidia*
 
@@ -149,14 +154,3 @@ done
 #      --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/SPECR_7B_Qwen --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
 # python -m lm_eval --model vllm_speculative --model_args "service_script_path=./spec_service.py,spec_reason=True,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,small_model=akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-GRPO-SpeculativeReasoner,max_tokens=16384,big_model_gpus=0|1,small_model_gpus=2,pretrained=meta-llama/Llama-2-7b-chat-hf"  \
 #      --tasks aime24_nofigures --batch_size auto --apply_chat_template  --output_path log_traces/SPECR_7B_Qwen --log_samples --gen_kwargs "max_gen_toks=16384,thinking_start=\n<think>,thinking_end=\n</think>" 
-
-# # # Speculative decoding text (requires a padded model)
-python -m lm_eval \
-  --model vllm_speculative \
-  --model_args 'service_script_path=./spec_service.py,spec_decoding=True,speculative_config={"model":"DeepSeek-R1-Distill-Qwen-1.5B-padded"\,"num_speculative_tokens":5\,"draft_tensor_parallel_size":2},seed=42,gpu_memory_utilization=0.8,max_model_len=22000,max_tokens=20000,big_model=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B,big_model_gpus=0|1,enforce_eager=True' \
-  --tasks aime24_nofigures \
-  --batch_size auto \
-  --apply_chat_template \
-  --output_path log_traces/SPEC_DEC_32B \
-  --log_samples \
-  --gen_kwargs "max_gen_toks=4096"

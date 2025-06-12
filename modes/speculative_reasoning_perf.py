@@ -10,7 +10,9 @@ import httpx
 SMALL_CHUNK      = 64
 STREAM_BUCKET    = 8
 NUM_PROBE_TOKENS = 6
-MAX_TOTAL_TOKENS = 8192
+# MAX_TOTAL_TOKENS = 8192
+# MAX_TOTAL_TOKENS = 2176 # 4096 + 128
+MAX_TOTAL_TOKENS = 4224 # 4096 + 128
 MAX_BIG_SEGMENT  = 128
 BIG_CHUNK_CAP    = 32
 
@@ -180,6 +182,7 @@ async def _run_speculative_async(
                         for idx in range(len(prefixes)-1, -1, -1):
                             if probe[idx]["choices"][0]["text"].lstrip(
                             ).startswith(BIG_CLOSE[:4]):
+                            # if BIG_CLOSE[:4] in probe[idx]["choices"][0]["text"].lstrip():
                                 handoff = idx
                                 break
                         if handoff is not None:

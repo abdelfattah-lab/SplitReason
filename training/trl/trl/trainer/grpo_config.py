@@ -135,6 +135,8 @@ class GRPOConfig(TrainingArguments):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
     """
+    spec_service_url: str = "http://localhost:5002"
+    spec_service_timeout: float = 600.0
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[dict] = field(
@@ -223,7 +225,7 @@ class GRPOConfig(TrainingArguments):
 
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: bool = field(
-        default=False,
+        default=True,
         metadata={
             "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a vLLM server is "
             "running. To run the server, install vLLM (`pip install vllm`) and run `trl vllm-serve`."

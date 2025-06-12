@@ -1,34 +1,65 @@
-import traceback
-from typing import List, Tuple
-import random
-from tqdm import tqdm
+import asyncio
+import datetime as _dt
 import os
-import datetime
+import random
 import time
+import traceback
 import uuid
-from typing import List, Tuple, Dict, Any, Optional, Union
-# final_reply, usage_data = run_random_switch_flow(
-    #     question=question,
-    #     test_logging=test_logging,
-    #     temperature=temperature,
-    #     max_tokens=max_tokens,
-    #     terminating_string=terminating_string,
-    #     big_model_port=service_args.big_model_port,
-    #     big_model=service_args.big_model,
-    #     small_model_port=service_args.small_model_port,
-    #     small_model=service_args.small_model,
-    #     batched_generate_text_vllm=batched_generate_text_vllm,
-    #     batched_eval_logprob_vllm=batched_eval_logprob_vllm,
-    #     switch_ratio=switch_ratio,
-    #     switch_chunk=switch_chunk,
-# )
+from typing import Any, Dict, List, Tuple
 
+###############################################################################
+# Random‑Switch Flow                                                         #
+# ------------------------------------------------------------------------- #
+# This implementation keeps the public API identical to the original        #
+# `run_random_switch_flow` function while modernising its internals.        #
+#                                                                           #
+#  *   Asynchronous – the heavy network call to `batched_generate_text_vllm`
+#      is executed in a worker thread so that the event‑loop stays live.    #
+#  *   Robust – every remote call is wrapped in a protective layer that     #
+#      prints the full traceback before re‑raising, preventing silent fail. #
+#  *   Random – the decision to use the big or small model is made purely   #
+#      by RNG according to `switch_ratio`; no speculative hand‑off logic.   #
+###############################################################################
 
-def sanitize_question(question: str) -> str:
-    terms_to_remove = ["<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<think>"]
-    for term in terms_to_remove:
-        question = question.replace(term, "")
-    return question
+def _strip_control_tokens(text: str) -> str:
+    """Remove special control tokens that sometimes appear in prompts."""
+    for t in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
+              "<｜end▁of▁sentence｜>", "<think>"):
+        text = text.replace(t, "")
+    return text
+
+async def _async_call(fn, *args, **kwargs):
+    """Run *blocking* `fn` in a worker‑thread and return its result."""
+    import asyncio
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+async def _safe_generate(
+    batched_generate_text_vllm,
+    prompt: str,
+    *,
+    port: int,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    requests,
+):
+    """Thin async wrapper around `batched_generate_text_vllm` with traceback."""
+    try:
+        return await _async_call(
+            batched_generate_text_vllm,
+            prompts=[prompt],
+            port=port,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+            requests=requests,
+        )
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("\n=== generation failed ===", file=sys.stderr)
+        print(tb, file=sys.stderr, flush=True)
+        raise RuntimeError(f"generation failed: {e}") from e
+
 
 def run_random_switch_flow(
     question: str,
@@ -40,151 +71,90 @@ def run_random_switch_flow(
     big_model: str,
     small_model_port: int,
     small_model: str,
-    batched_generate_text_vllm,  # function for batched text generation
-    batched_eval_logprob_vllm,   # (not used in this example, but included for consistency)
+    batched_generate_text_vllm,  # callable
+    batched_eval_logprob_vllm,   # kept for signature compatibility
     switch_ratio: int,
     switch_chunk: int,
     requests,
 ) -> Tuple[str, List[Dict[str, Any]]]:
+    """Modern random switcher that alternates big/small models stochastically.
+
+    The probability of selecting *big_model* each step is ``1/(switch_ratio+1)``
+    (e.g. ``switch_ratio=1``  →  50‑50).  At every step we request exactly
+    ``switch_chunk`` tokens from the chosen model until we either encounter a
+    ``finish_reason == 'stop'`` or reach ``max_tokens``.
     """
-    Randomly switch between a small model and a big model when generating text.
 
-    Args:
-        question (str): The user question or prompt.
-        test_logging (bool): Whether to log intermediate results to disk.
-        temperature (float): Generation temperature for sampling.
-        max_tokens (int): Maximum total tokens to generate before stopping.
-        terminating_string (str): A delimiter string that indicates user query end.
-        big_model_port (int): Port for the big model's service.
-        big_model (str): The name/path of the big model.
-        small_model_port (int): Port for the small model's service.
-        small_model (str): The name/path of the small model.
-        batched_generate_text_vllm (callable): A batched text generation function.
-        batched_eval_logprob_vllm (callable): A batched logprob evaluation function (not used here).
-        switch_ratio (int): An integer controlling the probability of choosing the big model.
-                            Probability of choosing big model = 1/(switch_ratio + 1).
-                            Probability of choosing small model = switch_ratio/(switch_ratio + 1).
-        switch_chunk (int): Number of tokens to request each time we generate from a model.
+    async def _run_async() -> Tuple[str, List[Dict[str, Any]]]:
+        usage: List[Dict[str, Any]] = []
+        rng = random.Random()
+        p_big = 1.0 / (switch_ratio + 1.0)
+        start = time.time()
 
-    Returns:
-        Tuple[str, List[Dict[str, Any]]]:
-            final_prompt (str): The final text after random switching generation.
-            usage_data (List[Dict[str, Any]]): A list of usage records (empty or minimal for now).
-    """
-    # Prepare test logging directory if needed
-    if test_logging:
-        draft_logs = "random_switch_draft_logs"
-        if not os.path.exists(draft_logs):
-            os.makedirs(draft_logs)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        subfolder_path = os.path.join(draft_logs, timestamp)
-        os.makedirs(subfolder_path, exist_ok=True)
 
-    # Probability of choosing the big model on each step
-    # According to your spec:
-    #   if switch_ratio = 1 => p_big = 1/(1+1) = 1/2 => 50:50
-    #   if switch_ratio = 2 => p_big = 1/(2+1) = 1/3 => 33:66
-    p_big = 1.0 / (switch_ratio + 1.0)
+        def _clean(t):  # strip special markers
+            for s in ("<｜User｜>", "<｜Assistant｜>", "<｜begin▁of▁sentence｜>",
+                    "<｜end▁of▁sentence｜>", "<think>"):
+                t = t.replace(s, "")
+            return t
 
-    # We'll track usage info here if needed
-    usage_data: List[Dict[str, Any]] = []
+        big_hint = ""
+        term_str = "\n Put your final answer within \\boxed{}."
+        cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
+            f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
+        current_text   = cur
+        tokens_emitted = 0
+        big_tokens     = 0
+        big_calls      = 0
 
-    # We can prefix the prompt with something similar to your reference code
-    model_think_prefix = "<think>\n"
-    model_think_suffix = "</think>"
-    question = sanitize_question(question)
-    base_prompt = (
-        f"<｜begin▁of▁sentence｜><｜User｜>{question}\n"
-        f"{terminating_string}"
-        f"<｜Assistant｜>\n"
-        f"{model_think_prefix}"
-    )
-    uuid_ = str(uuid.uuid4())
-    # make folder called random_switcher
-    if not os.path.exists("random_switcher"):
-        os.makedirs("random_switcher")
+        step = 0
+        while tokens_emitted < max_tokens:
+            # ───── decide which model to use this round ─────
+            use_big = rng.random() < p_big
+            model   = big_model  if use_big else small_model
+            port    = big_model_port if use_big else small_model_port
+            if use_big:
+                big_calls   += 1
+                big_tokens  += switch_chunk
 
-    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    current_text = base_prompt
-    tokens_generated = 0
-    bigm_tokens = 0
-    num_big_times = 0
-    # Main generation loop
-    while tokens_generated < max_tokens:
-        # Decide which model to use (big or small) on this step
-        use_big_model = (random.random() < p_big)
-        if use_big_model:
-            num_big_times += 1
-            bigm_tokens += switch_chunk
-        chosen_model = big_model if use_big_model else small_model
-        chosen_port = big_model_port if use_big_model else small_model_port
-
-        # We'll request exactly switch_chunk tokens from the chosen model
-        try:
-            # We only have one prompt in the batch, so pass [current_text]
-            generation_resps, latency = batched_generate_text_vllm(
-                prompts=[current_text],
-                port=chosen_port,
+            # ───── call remote model ─────
+            resp, _ = await _safe_generate(
+                batched_generate_text_vllm,
+                current_text,
+                port=port,
+                model=model,
                 temperature=temperature,
                 max_tokens=switch_chunk,
-                model=chosen_model,
-                requests=requests  # you can pass your own requests/session object if needed
+                requests=requests,
             )
-        except Exception as e:
-            print(f"ERROR while generating from {chosen_model}: {e}")
-            print("Traceback:", traceback.format_exc())
-            # Return early with what we have so far
-            bigm_percentage = (bigm_tokens / tokens_generated) * 100 if tokens_generated > 0 else 0
-            if not os.path.exists("random_switcher.csv"):
-                with open("random_switcher.csv", "w") as f:
-                    f.write("UUID,Time,Question,Final Prompt,BigM Tokens,Num Big Times,Tokens Generated,BigM Percentage\n")
-            # Write to csv
-            with open("random_switcher.csv", "a") as f:
-                f.write(f"{uuid_},{current_time},{bigm_tokens},{num_big_times},{tokens_generated},{bigm_percentage}\n")
-            return current_text, usage_data
 
-        partial_resp = generation_resps[0]["choices"][0]
-        partial_text = partial_resp["text"]
-        finish_reason = partial_resp["finish_reason"]  # e.g. 'stop', 'length', 'None'
+            delta        = resp[0]["choices"][0]["text"]
+            finish_reason = resp[0]["choices"][0]["finish_reason"] or "length"
+            step        += 1
 
-        # Append the newly generated text to our current_text
-        current_text += partial_text
-        tokens_generated += switch_chunk
+            current_text   += delta
+            tokens_emitted += switch_chunk
 
-        # Optionally log the intermediate step
-        if test_logging:
-            # For demonstration, let's just store each step in a file
-            log_filename = os.path.join(subfolder_path, f"step_{tokens_generated}.txt")
-            with open(log_filename, "w", encoding="utf-8") as f:
-                f.write(f"Model used: {chosen_model}\n")
-                f.write(f"Finish reason: {finish_reason}\n")
-                f.write(f"Partial text:\n{partial_text}\n")
-                f.write("-" * 70 + "\n")
-                f.write(f"Current full text so far:\n{current_text}\n")
+            if finish_reason == "stop":
+                break
 
-        # We check if the model indicated an end of sentence or any finishing
-        # condition. You can define your own condition more precisely:
-        if finish_reason == "stop":
-            break
+        tot = time.time() - start
 
-        # Also break if we've reached the token limit
-        if tokens_generated >= max_tokens:
-            break
+        try:
+            csv = "random_switcher.csv"
+            now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            new = not os.path.exists(csv)
+            with open(csv, "a", encoding="utf‑8") as fh:
+                if new:
+                    fh.write("uuid,big_calls,big_tokens,total_tokens,total_time,time_per_tok,p_big,datetime\n")
+                fh.write(
+                    f"{uuid.uuid4()},{big_calls},{big_tokens},{tokens_emitted},{tot},"
+                    f"{tot / tokens_emitted if tokens_emitted > 0 else 0},"
+                    f"{p_big},{now}\n"
+                )
+        except Exception:
+            pass
 
-    final_prompt = current_text
+        return current_text, usage
 
-    if test_logging:
-        final_log_path = os.path.join(subfolder_path, "final_text.txt")
-        with open(final_log_path, "w", encoding="utf-8") as f:
-            f.write(final_prompt)
-    # Get current time
-    # make a csv file called random_switcher.csv
-    # Return final text and usage data
-    bigm_percentage = (bigm_tokens / tokens_generated) * 100 if tokens_generated > 0 else 0
-    if not os.path.exists("random_switcher.csv"):
-        with open("random_switcher.csv", "w") as f:
-            f.write("UUID,Time,Question,Final Prompt,BigM Tokens,Num Big Times,Tokens Generated,BigM Percentage\n")
-    # Write to csv
-    with open("random_switcher.csv", "a") as f:
-        f.write(f"{uuid_},{current_time},{bigm_tokens},{num_big_times},{tokens_generated},{bigm_percentage}\n")
-    return final_prompt, usage_data
+    return asyncio.run(_run_async())

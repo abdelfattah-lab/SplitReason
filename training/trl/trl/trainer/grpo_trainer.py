@@ -44,6 +44,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
+from ..extras.weight_sync_client import WeightSyncClient
 from ..import_utils import is_deepspeed_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
@@ -330,9 +331,9 @@ class GRPOTrainer(Trainer):
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
-        # Resize token embeddings just in case
+        # # Resize token embeddings just in case
         model.resize_token_embeddings(len(processing_class))
-        print(f"\n\n\nMODEL TOKEN EMBEDDING RESIZED TO {len(processing_class)}\n\n\n")
+        # print(f"\n\n\nMODEL TOKEN EMBEDDING RESIZED TO {len(processing_class)}\n\n\n")
         
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -458,10 +459,14 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
+                # self.vllm_client = VLLMClient(
+                #     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
+                # )
+                self.vllm_client = WeightSyncClient(
+                    tokenizer     = processing_class,
+                    spec_endpoint = args.spec_service_url,
+                    timeout       = args.spec_service_timeout,
                 )
-
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
 
@@ -640,8 +645,9 @@ class GRPOTrainer(Trainer):
                         self.vllm_client.update_named_param(name, param.data)
 
         # Reset cache on main process
-        if self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
+        # HUGE potential problem: prefix cache reset is [[[[DISABLED!!]]]]
+        # if self.accelerator.is_main_process:
+        #     self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
