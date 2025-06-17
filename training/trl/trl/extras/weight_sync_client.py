@@ -2,6 +2,7 @@
 import io, json, time, typing, requests
 import torch
 from transformers import PreTrainedTokenizerBase
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np         #  add import at top
 
@@ -91,15 +92,52 @@ class WeightSyncClient:
 
         requests.post(f"{self.base_url}/update_param",
                     data=data, files=files, timeout=self.timeout).raise_for_status()
-            # ------------------------------------------------------------
-        # 2) Flush KV‑cache on the server (call after *all* params done)
         # ------------------------------------------------------------
-        def reset_prefix_cache(self) -> None:
-            requests.post(f"{self.base_url}/reset_cache", timeout=self.timeout).raise_for_status()
+    # 2) Flush KV‑cache on the server (call after *all* params done)
+    # ------------------------------------------------------------
+    def reset_prefix_cache(self) -> None:
+        requests.post(f"{self.base_url}/reset_cache", timeout=self.timeout).raise_for_status()
 
-    # ------------------------------------------------------------
-    # 3) Text generation via /speculative_reason (perf mode)
-    # ------------------------------------------------------------
+    # # ------------------------------------------------------------
+    # # 3) Text generation via /speculative_reason (perf mode)
+    # # ------------------------------------------------------------
+    # def generate(
+    #     self,
+    #     prompts: list[str],
+    #     n: int,
+    #     repetition_penalty: float,
+    #     temperature: float,
+    #     top_p: float,
+    #     top_k: int,
+    #     min_p: float,
+    #     max_tokens: int,
+    #     guided_decoding_regex: typing.Optional[str] = None,   # kept for API compatibility
+    # ) -> list[list[int]]:
+    #     """
+    #     Returns *token‑ids* (NOT strings) – exactly what GRPOTrainer expects.
+
+    #     Shape:  len(prompts) * n  (same order as input: [p0_0, p0_1, …, p1_0, …])
+    #     """
+    #     completions: list[list[int]] = []
+
+    #     payload_template = {
+    #         # fixed knobs that come from GRPOTrainer’s sampling args
+    #         "spec_reason_perf": True,
+    #     }
+
+    #     for prompt in prompts:
+    #         for _ in range(n):
+    #             payload = {**payload_template, "question": prompt}
+    #             r = requests.post(f"{self.base_url}/speculative_reason",
+    #                               json=payload, timeout=self.timeout)
+    #             r.raise_for_status()
+    #             text = r.json()["final_answer"]
+    #             # print(text)
+    #             ids  = self.tok.encode(text, add_special_tokens=False)
+    #             completions.append(ids)
+
+    #     return completions
+
     def generate(
         self,
         prompts: list[str],
@@ -110,29 +148,50 @@ class WeightSyncClient:
         top_k: int,
         min_p: float,
         max_tokens: int,
-        guided_decoding_regex: typing.Optional[str] = None,   # kept for API compatibility
+        guided_decoding_regex: typing.Optional[str] = None,
     ) -> list[list[int]]:
         """
-        Returns *token‑ids* (NOT strings) – exactly what GRPOTrainer expects.
-
-        Shape:  len(prompts) * n  (same order as input: [p0_0, p0_1, …, p1_0, …])
+        Returns a flat list of token‑ID sequences:
+        [p0_sample0, p0_sample1, …, p1_sample0, …]
         """
-        completions: list[list[int]] = []
+        # payload_template = {
+        #     "spec_reason_perf": True,
+        #     "repetition_penalty": repetition_penalty,
+        #     "temperature": temperature,
+        #     "top_p": top_p,
+        #     "top_k": top_k,
+        #     "min_p": min_p,
+        #     "max_tokens": max_tokens,
+        # }
+        payload_template = {"spec_reason_perf": True}
 
-        payload_template = {
-            # fixed knobs that come from GRPOTrainer’s sampling args
-            "spec_reason_perf": True,
-        }
+        # ❶ Pre‑allocate result container
+        total_reqs = len(prompts) * n
+        completions: list[list[int]] = [None] * total_reqs
 
-        for prompt in prompts:
-            for _ in range(n):
-                payload = {**payload_template, "question": prompt}
-                r = requests.post(f"{self.base_url}/speculative_reason",
-                                  json=payload, timeout=self.timeout)
-                r.raise_for_status()
-                text = r.json()["final_answer"]
-                # print(text)
-                ids  = self.tok.encode(text, add_special_tokens=False)
-                completions.append(ids)
+        # ❷ Use a single Session for connection re‑use
+        sess = requests.Session()
+        sess.headers.update({"Connection": "keep-alive"})
+
+        def _one_call(prompt: str, slot: int):
+            payload = {**payload_template, "question": prompt}
+            r = sess.post(f"{self.base_url}/speculative_reason",
+                          json=payload,
+                          timeout=self.timeout)
+            r.raise_for_status()
+            text = r.json()["final_answer"]
+            completions[slot] = self.tok.encode(text, add_special_tokens=False)
+
+        # ❸ Launch in parallel
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            futures = []
+            for i, prompt in enumerate(prompts):
+                for j in range(n):
+                    slot = i * n + j            # preserve required order
+                    futures.append(pool.submit(_one_call, prompt, slot))
+
+            # Will raise on the first failed request
+            for fut in as_completed(futures):
+                fut.result()
 
         return completions

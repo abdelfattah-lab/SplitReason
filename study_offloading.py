@@ -89,23 +89,25 @@ def main() -> None:
     #     "Repeat8_SPECR14B": "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_14B_10Aug/meta-llama__Llama-2-7b-chat-hf",
     #     "Repeat8_SPECR32B": "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_32B_10Aug/meta-llama__Llama-2-7b-chat-hf",
     # }
+    base_path = "/mnt/home/ya255/projects/SplitReason/log_traces/"
     json_folder_dict = {
-        # vllm-spec service for accuracy measurement with 1.5B model
-        "vlspec_ONLY_15B": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B/meta-llama__Llama-2-7b-chat-hf",
-        # vllm-spec service with no-prefix-caching for accuracy measurement with 1.5B model
-        "vlspec_ONLY_15B_no_prefix": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B_no_prefix/meta-llama__Llama-2-7b-chat-hf",
-        # vllm-spec service with no prefix caching and no chunked prefill for accuracy measurement with 1.5B model
-        "vlspec_ONLY_15B_no_prefix_no_chunk": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B_no_prefix_no_chunk/meta-llama__Llama-2-7b-chat-hf",
-        # vllm base service for accuracy measurement with 1.5B model
-        "ONLY_15B_vllm": "/home/ya255/projects/SpeculativeReasoning/log_traces/vLLM_ONLY_15B_13Aug/deepseek-ai__DeepSeek-R1-Distill-Qwen-1.5B",
-        # vllm base service with \boxed prompt for accuracy measurement with 1.5B model
-        "ONLY_15B_vllm_fixp": "/home/ya255/projects/SpeculativeReasoning/log_traces/vLLM_ONLY_15B_13Aug_FixPrompt/deepseek-ai__DeepSeek-R1-Distill-Qwen-1.5B",
+        "E2EGRPO": "/mnt/home/ya255/projects/SplitReason/log_traces/NewModel_e2egrpo_8b_v2/meta-llama__Llama-2-7b-chat-hf"
+        # # vllm-spec service for accuracy measurement with 1.5B model
+        # "vlspec_ONLY_15B": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B/meta-llama__Llama-2-7b-chat-hf",
+        # # vllm-spec service with no-prefix-caching for accuracy measurement with 1.5B model
+        # "vlspec_ONLY_15B_no_prefix": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B_no_prefix/meta-llama__Llama-2-7b-chat-hf",
+        # # vllm-spec service with no prefix caching and no chunked prefill for accuracy measurement with 1.5B model
+        # "vlspec_ONLY_15B_no_prefix_no_chunk": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B_no_prefix_no_chunk/meta-llama__Llama-2-7b-chat-hf",
+        # # vllm base service for accuracy measurement with 1.5B model
+        # "ONLY_15B_vllm": "/home/ya255/projects/SpeculativeReasoning/log_traces/vLLM_ONLY_15B_13Aug/deepseek-ai__DeepSeek-R1-Distill-Qwen-1.5B",
+        # # vllm base service with \boxed prompt for accuracy measurement with 1.5B model
+        # "ONLY_15B_vllm_fixp": "/home/ya255/projects/SpeculativeReasoning/log_traces/vLLM_ONLY_15B_13Aug_FixPrompt/deepseek-ai__DeepSeek-R1-Distill-Qwen-1.5B",
         
     }
     # list all folders in /home/ya255/projects/SpeculativeReasoning/log_traces/
-    fol_path_list = os.listdir("/home/ya255/projects/SpeculativeReasoning/log_traces/")
+    fol_path_list = os.listdir(base_path)
     # use name of folder as key and path as value
-    json_folder_dict = {f: os.path.join("/home/ya255/projects/SpeculativeReasoning/log_traces/", f) for f in fol_path_list}
+    json_folder_dict = {f: os.path.join(base_path, f) for f in fol_path_list}
     # list the folder inside each value, add that to the path
     for k, v in json_folder_dict.items():
         # list all folders in v

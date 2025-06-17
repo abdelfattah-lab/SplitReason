@@ -40,6 +40,7 @@ env = os.environ.copy()
 # add the directory that contains weight_sync_ext/ to PYTHONPATH
 project_root = Path(__file__).resolve().parent
 env["PYTHONPATH"] = f"{project_root}:{env.get('PYTHONPATH', '')}"
+SMALL_LLM_LOCK = threading.Lock()
 
 
 app = Flask(__name__)
@@ -329,7 +330,7 @@ def _to_openai_single(out, want_tokens=False):
         "text":  out.text,
         "finish_reason": getattr(out, "finish_reason", None),
     }
-    print("[Service] finish_reason:", choice["finish_reason"])
+    # print("[Service] finish_reason:", choice["finish_reason"])
     if want_tokens:
         choice["logprobs"] = {
             "tokens":            out.tokens,
@@ -364,7 +365,8 @@ def generate_text_vllm(prompt,
             include_stop_str_in_output = True,
         )
         t0 = time.time()
-        out = SMALL_LLM.generate([prompt], params)[0].outputs[0]
+        with SMALL_LLM_LOCK:
+            out = SMALL_LLM.generate([prompt], params)[0].outputs[0]
         latency = time.time() - t0
         return _to_openai_single(out), latency
 
@@ -424,7 +426,8 @@ def batched_generate_text_vllm(prompts: List[str],
             include_stop_str_in_output = True,
         )
         t0   = time.time()
-        outs = SMALL_LLM.generate(prompts, params)
+        with SMALL_LLM_LOCK:
+            outs = SMALL_LLM.generate(prompts, params)
         latency = (time.time() - t0) / max(1, len(prompts))
         results = [_to_openai_single(o.outputs[0]) for o in outs]
         return results, latency
@@ -483,7 +486,8 @@ def batched_generate_text_with_tokens_vllm(prompts: List[str],
             include_stop_str_in_output = True,
         )
         t0   = time.time()
-        outs = SMALL_LLM.generate(prompts, params)
+        with SMALL_LLM_LOCK:
+            outs = SMALL_LLM.generate(prompts, params)
         latency = (time.time() - t0) / max(1, len(prompts))
 
         results     = []

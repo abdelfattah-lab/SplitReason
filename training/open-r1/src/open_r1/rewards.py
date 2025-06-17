@@ -188,10 +188,16 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
     """
 
     def bigmodel_count_reward(n: int) -> float:
-        if n <= 8:
-            return 0.5 * n
+        peak = 6
+        if n <= peak:
+            return slope * n
         else:
-            return 4.0 - 0.5 * (n - 8)
+            # Equivalent to slope * (2*peak - n), which keeps continuity at `peak`
+            return slope * peak - slope * (n - peak)
+        # if n <= 8:
+        #     return 0.5 * n
+        # else:
+        #     return 4.0 - 0.5 * (n - 8)
 
     rewards = []
     for completion in completions:

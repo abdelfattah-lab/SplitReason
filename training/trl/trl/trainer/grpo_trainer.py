@@ -646,8 +646,8 @@ class GRPOTrainer(Trainer):
 
         # Reset cache on main process
         # HUGE potential problem: prefix cache reset is [[[[DISABLED!!]]]]
-        # if self.accelerator.is_main_process:
-        #     self.vllm_client.reset_prefix_cache()
+        if self.accelerator.is_main_process:
+            self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
