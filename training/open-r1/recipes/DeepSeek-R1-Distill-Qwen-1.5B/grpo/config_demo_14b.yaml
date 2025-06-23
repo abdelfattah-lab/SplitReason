@@ -20,11 +20,11 @@ system_prompt: "You are a helpful AI Assistant that provides well-reasoned and d
 bf16: true
 use_vllm: true
 do_eval: false
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 1
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-hub_model_id: 1.5B_E2EGRPO_14B_128Gen_4K_2xAcc
+hub_model_id: E2EGRPO_bm14B_36Gen_2K_2xAccF
 # hub_model_id: DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1_Math_SpecR_GRPO_Mini-MiniSet_14BDrafter
 hub_strategy: every_save
 learning_rate: 1.0e-06
@@ -38,15 +38,15 @@ lr_scheduler_kwargs:
   min_lr_rate: 0.1
 max_prompt_length: 512
 max_completion_length: 2048
-max_steps: 200
-num_generations: 16
-# num_generations: 128
+max_steps: 400
+# num_generations: 4
+num_generations: 8
 num_train_epochs: 1
-output_dir: data/1.5B_E2EGRPO_14B_128Gen_4K_2xAcc
+output_dir: data/E2EGRPO_bm14B_36Gen_2K_2xAccF
 # output_dir: data/DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1_Math_SpecR_GRPO_Mini-MiniSet_14BDrafter
 overwrite_output_dir: true
-per_device_eval_batch_size: 16
-per_device_train_batch_size: 16
+per_device_eval_batch_size: 2
+per_device_train_batch_size: 4
 push_to_hub: true
 report_to:
 - wandb

@@ -5,6 +5,11 @@ from transformers import PreTrainedTokenizerBase
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np         #  add import at top
+from tqdm import tqdm
+from typing import Optional, List
+import typing
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
 
 class WeightSyncClient:
     """
@@ -21,7 +26,7 @@ class WeightSyncClient:
         self,
         tokenizer: PreTrainedTokenizerBase,
         spec_endpoint: str = "http://localhost:5002",                 # e.g. "http://localhost:5002"
-        timeout: float = 600.0,
+        timeout: float = 1200.0,
     ):
         self.tok      = tokenizer
         self.base_url = spec_endpoint.rstrip("/")
@@ -138,6 +143,69 @@ class WeightSyncClient:
 
     #     return completions
 
+
+    # def generate(
+    #     self,
+    #     prompts: List[str],
+    #     n: int,
+    #     repetition_penalty: float,
+    #     temperature: float,
+    #     top_p: float,
+    #     top_k: int,
+    #     min_p: float,
+    #     max_tokens: int,
+    #     guided_decoding_regex: Optional[str] = None,
+    # ) -> List[List[int]]:
+    #     """
+    #     Returns a flat list of token-ID sequences:
+    #     [p0_sample0, p0_sample1, …, p1_sample0, …]
+    #     Added: tqdm progress bar + per-item status line.
+    #     """
+    #     payload_template = {"spec_reason_perf": True}
+
+    #     # ❶ Pre-allocate result container
+    #     total_reqs = len(prompts) * n
+    #     completions: List[List[int]] = [None] * total_reqs
+
+    #     # ❷ Re-use one session
+    #     sess = requests.Session()
+    #     sess.headers.update({"Connection": "keep-alive"})
+
+    #     def _one_call(prompt: str, slot: int):
+    #         payload = {**payload_template, "question": prompt}
+    #         r = sess.post(
+    #             f"{self.base_url}/speculative_reason",
+    #             json=payload,
+    #             timeout=self.timeout,
+    #         )
+    #         r.raise_for_status()
+    #         text = r.json()["final_answer"]
+    #         completions[slot] = self.tok.encode(text, add_special_tokens=False)
+
+    #     # ❸ Launch in parallel with live progress feedback
+    #     with ThreadPoolExecutor(max_workers=1) as pool, tqdm(
+    #         total=total_reqs,
+    #         desc="Generating",
+    #         unit="sample",
+    #         dynamic_ncols=True,
+    #         leave=True,       # keep the bar after completion
+    #         bar_format=(
+    #             "{l_bar}{bar}| {n_fmt}/{total_fmt} • {elapsed} ↔ {remaining} "
+    #             "• ETA {remaining}  "
+    #         ),
+    #     ) as pbar:
+    #         futures = []
+    #         for i, prompt in enumerate(prompts):
+    #             for j in range(n):
+    #                 slot = i * n + j
+    #                 futures.append(pool.submit(_one_call, prompt, slot))
+
+    #         for idx, fut in enumerate(as_completed(futures), start=1):
+    #             fut.result()          # raises if the request failed
+    #             pbar.update(1)
+    #             print(f"Item {idx} processed out of {total_reqs} items", flush=True)
+    #     return completions
+
     def generate(
         self,
         prompts: list[str],
@@ -149,49 +217,107 @@ class WeightSyncClient:
         min_p: float,
         max_tokens: int,
         guided_decoding_regex: typing.Optional[str] = None,
+        *,
+        server_parallelism: int = 4,   # set to the number of requests your server can run concurrently
     ) -> list[list[int]]:
         """
-        Returns a flat list of token‑ID sequences:
-        [p0_sample0, p0_sample1, …, p1_sample0, …]
+        Return a flat list of token-ID sequences in the order
+            [p0_sample0, p0_sample1, …, p1_sample0, …]
         """
-        # payload_template = {
-        #     "spec_reason_perf": True,
-        #     "repetition_penalty": repetition_penalty,
-        #     "temperature": temperature,
-        #     "top_p": top_p,
-        #     "top_k": top_k,
-        #     "min_p": min_p,
-        #     "max_tokens": max_tokens,
-        # }
+
         payload_template = {"spec_reason_perf": True}
 
-        # ❶ Pre‑allocate result container
-        total_reqs = len(prompts) * n
-        completions: list[list[int]] = [None] * total_reqs
+        total_reqs   = len(prompts) * n
+        completions  = [None] * total_reqs
 
-        # ❷ Use a single Session for connection re‑use
-        sess = requests.Session()
-        sess.headers.update({"Connection": "keep-alive"})
+        def _one_call(prompt: str, slot: int) -> None:
+            """Send one HTTP request and fill completions[slot]."""
+            with requests.Session() as sess:          # session per thread
+                print(f"Posting item {slot} out of {total_reqs}", flush=True)
+                start_time = time.time()
+                sess.headers.update({"Connection": "keep-alive"})
+                payload = {**payload_template, "question": prompt}
+                r = sess.post(f"{self.base_url}/speculative_reason",
+                              json=payload, timeout=self.timeout)
+                r.raise_for_status()
+                text = r.json()["final_answer"]
+                completions[slot] = self.tok.encode(text, add_special_tokens=False)
+                elapsed = time.time() - start_time
+                print(f"Processing item {slot} out of {total_reqs} "
+                      f"took {elapsed:.2f} seconds", flush=True)
+                print(f"[rank-0] finished slot {slot}/{total_reqs-1}", flush=True)
 
-        def _one_call(prompt: str, slot: int):
-            payload = {**payload_template, "question": prompt}
-            r = sess.post(f"{self.base_url}/speculative_reason",
-                          json=payload,
-                          timeout=self.timeout)
-            r.raise_for_status()
-            text = r.json()["final_answer"]
-            completions[slot] = self.tok.encode(text, add_special_tokens=False)
-
-        # ❸ Launch in parallel
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        workers = min(server_parallelism, total_reqs)  # never oversubscribe
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = []
             for i, prompt in enumerate(prompts):
                 for j in range(n):
-                    slot = i * n + j            # preserve required order
+                    slot = i * n + j
                     futures.append(pool.submit(_one_call, prompt, slot))
 
-            # Will raise on the first failed request
             for fut in as_completed(futures):
-                fut.result()
+                fut.result()  # will raise immediately on first error
 
         return completions
+    # def generate(
+    #     self,
+    #     prompts: list[str],
+    #     n: int,
+    #     repetition_penalty: float,
+    #     temperature: float,
+    #     top_p: float,
+    #     top_k: int,
+    #     min_p: float,
+    #     max_tokens: int,
+    #     guided_decoding_regex: typing.Optional[str] = None,
+    # ) -> list[list[int]]:
+    #     """
+    #     Returns a flat list of token‑ID sequences:
+    #     [p0_sample0, p0_sample1, …, p1_sample0, …]
+    #     """
+    #     # payload_template = {
+    #     #     "spec_reason_perf": True,
+    #     #     "repetition_penalty": repetition_penalty,
+    #     #     "temperature": temperature,
+    #     #     "top_p": top_p,
+    #     #     "top_k": top_k,
+    #     #     "min_p": min_p,
+    #     #     "max_tokens": max_tokens,
+    #     # }
+    #     payload_template = {"spec_reason_perf": True}
+
+    #     # ❶ Pre‑allocate result container
+    #     total_reqs = len(prompts) * n
+    #     completions: list[list[int]] = [None] * total_reqs
+
+    #     # ❷ Use a single Session for connection re‑use
+    #     sess = requests.Session()
+    #     sess.headers.update({"Connection": "keep-alive"})
+
+    #     def _one_call(prompt: str, slot: int):
+    #         payload = {**payload_template, "question": prompt}
+    #         print(f"Posting item {slot} out of {total_reqs}", flush=True)
+    #         r = sess.post(f"{self.base_url}/speculative_reason",
+    #                       json=payload,
+    #                       timeout=self.timeout)
+    #         r.raise_for_status()
+    #         text = r.json()["final_answer"]
+    #         print(f"Processing item {slot} out of {total_reqs}", flush=True)
+    #         completions[slot] = self.tok.encode(text, add_special_tokens=False)
+    #         print(f"[rank-0] finished slot {slot}/{total_reqs-1}", flush=True)
+
+    #     # ❸ Launch in parallel
+    #     with ThreadPoolExecutor(max_workers=8) as pool:
+    #         futures = []
+    #         for i, prompt in enumerate(prompts):
+    #             for j in range(n):
+    #                 slot = i * n + j            # preserve required order
+    #                 futures.append(pool.submit(_one_call, prompt, slot))
+
+    #         # Will raise on the first failed request
+    #         for fut in as_completed(futures):
+    #             # print(f"Processing item {fut} out of {total_reqs}", flush=True)
+    #             fut.result()
+    #             # print(f"Item {fut} processed out of {total_reqs} items", flush=True)
+
+    #     return completions

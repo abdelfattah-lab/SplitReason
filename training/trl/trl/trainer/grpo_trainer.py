@@ -18,6 +18,8 @@ import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from typing import Any, Callable, Optional, Sized, Union
+import threading
+import datetime, torch.distributed as dist
 
 import torch
 import torch.utils.data
@@ -56,6 +58,8 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
 )
+from datetime import timedelta
+from accelerate.utils import InitProcessGroupKwargs
 
 
 if is_deepspeed_available():
@@ -414,7 +418,15 @@ class GRPOTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
-
+        
+        self._hb_done = threading.Event()         # signal to stop the thread
+        self._hb_thread = None                    # holder for the thread obj
+        # ------------------------------------------------------------------
+        # give NCCL/ProcessGroup 4 hours instead of the hard-coded 30 minutes
+        pg_kwargs = InitProcessGroupKwargs(timeout=timedelta(hours=40))
+        # TrainingArguments (GRPOConfig) exposes `kwargs_handlers`
+        args.kwargs_handlers = [pg_kwargs]
+        # ------------------------------------------------------------------
         super().__init__(
             model=model,
             args=args,
@@ -425,6 +437,16 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+        # import torch.distributed as dist, datetime
+
+        # if dist.is_initialized():
+        #     # _get_default_group() exists in all recent Torch versions
+        #     pg = dist.distributed_c10d._get_default_group()
+        #     print(f"[rank {dist.get_rank()}] PG timeout →", pg._timeout)  # datetime.timedelta
+
+        # import torch.distributed as dist
+        # if dist.is_initialized():
+        #     print("PG timeout", dist.get_backend_timeout())  # should print 4:00:00
 
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
@@ -511,7 +533,44 @@ class GRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+                        
+    def _nccl_heartbeat(self, period=5):
+        buf = torch.zeros(1, device="cuda")
+        while not self._hb_done.is_set():
+            dist.all_reduce(buf)      # any cheap collective works
+            torch.cuda.synchronize()  # flush
+            time.sleep(period)
 
+    def _start_store_hb_thread(self):
+        """
+        Rank-0 only: touch the default c10d Store every 60 s so that other
+        ranks blocked in `dist.barrier()` don’t hit the 30-min idle timeout.
+        Returns (stop_event, thread) or None.
+        """
+        import threading, time, torch.distributed as dist
+
+        if not dist.is_initialized() or dist.get_rank() != 0:
+            return None                           # nothing to do on non-main ranks
+
+        # Older PyTorch (<2.0) doesn’t expose dist.get_store(); fall back.
+        try:
+            store = dist.get_store()
+        except AttributeError:
+            import torch.distributed.distributed_c10d as c10d
+            store = c10d._get_default_store()
+
+        key        = "hb_rank0"                   # any constant is fine
+        stop_event = threading.Event()
+
+        def _loop():
+            while not stop_event.is_set():
+                store.set(key, "1")               # 1-byte write
+                time.sleep(60)                    # << 30-min store watchdog
+
+        t = threading.Thread(target=_loop, daemon=True)
+        t.start()
+        return stop_event, t
+        
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -607,47 +666,233 @@ class GRPOTrainer(Trainer):
         logits = logits / self.temperature
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
+    # @profiling_decorator
+    # def _move_model_to_vllm(self):
+    #     # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
+    #     deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+    #     zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+    #     gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+
+    #     if is_peft_model(self.model):
+    #         # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
+    #         # adapters in a sharded manner is not supported.
+    #         with gather_if_zero3(list(self.model.parameters())):
+    #             self.model.merge_adapter()
+
+    #             # Update vLLM weights while parameters are gathered
+    #             for name, param in self.model.named_parameters():
+    #                 # When using PEFT, we need to recover the original parameter name and discard some parameters
+    #                 name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+    #                 if self.model.prefix in name:
+    #                     continue
+    #                 # When module to save, remove its prefix and discard the original module
+    #                 if "original_module" in name:
+    #                     continue
+    #                 name = name.replace("modules_to_save.default.", "")
+
+    #                 if self.accelerator.is_main_process:
+    #                     self.vllm_client.update_named_param(name, param.data)
+
+    #             # Unmerge adapters while parameters are still gathered
+    #             self.model.unmerge_adapter()
+    #             # Parameters will automatically be repartitioned when exiting the context
+    #     else:
+    #         # For non-PEFT models, simply gather and update each parameter individually.
+    #         for name, param in self.model.named_parameters():
+    #             with gather_if_zero3([param]):
+    #                 if self.accelerator.is_main_process:
+    #                     self.vllm_client.update_named_param(name, param.data)
+    #             if torch.distributed.is_initialized():
+    #                 torch.distributed.barrier()
+
+    #     # Reset cache on main process
+    #     # HUGE potential problem: prefix cache reset is [[[[DISABLED!!]]]]
+    #     if self.accelerator.is_main_process:
+    #         self.vllm_client.reset_prefix_cache()
+    #     if torch.distributed.is_initialized():
+    #         torch.distributed.barrier()
+        
+    # @profiling_decorator
+    # def _move_model_to_vllm(self):
+    #     # Decide whether we are in ZeRO‑3 or not
+    #     dsp = self.accelerator.state.deepspeed_plugin
+    #     zero3 = dsp is not None and dsp.zero_stage == 3
+    #     gather_if_zero3 = deepspeed.zero.GatheredParameters if zero3 else nullcontext
+
+    #     # ❶ Helper so we don’t repeat the same three lines twice
+    #     def _rendez_vous():
+    #         if torch.distributed.is_initialized():
+    #             torch.distributed.barrier()
+
+    #     # ───────────────────────────────────────────────────────
+    #     # 2. PEFT path  (all params gathered once)
+    #     # ───────────────────────────────────────────────────────
+    #     if is_peft_model(self.model):
+    #         with gather_if_zero3(list(self.model.parameters())):
+    #             self.model.merge_adapter()
+
+    #             for name, param in self.model.named_parameters():
+    #                 _rendez_vous()                       # BEFORE tensor
+
+    #                 # restore original names / skip helper params
+    #                 name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+    #                 if self.model.prefix in name or "original_module" in name:
+    #                     continue
+    #                 name = name.replace("modules_to_save.default.", "")
+
+    #                 if self.accelerator.is_main_process:
+    #                     self.vllm_client.update_named_param(name, param.data)
+
+    #                 _rendez_vous()                       # AFTER tensor
+
+    #             self.model.unmerge_adapter()
+
+    #     # ───────────────────────────────────────────────────────
+    #     # 3. Non‑PEFT path  (each param gathered individually
+    #     #                    in ZeRO‑3, or no gather in ZeRO‑2)
+    #     # ───────────────────────────────────────────────────────
+    #     else:
+    #         for name, param in self.model.named_parameters():
+    #             _rendez_vous()                           # BEFORE tensor
+
+    #             with gather_if_zero3([param]):
+    #                 if self.accelerator.is_main_process:
+    #                     self.vllm_client.update_named_param(name, param.data)
+
+    #             _rendez_vous()                           # AFTER tensor
+
+    #     # ───────────────────────────────────────────────────────
+    #     # 4. Flush KV cache once, then final sync
+    #     # ───────────────────────────────────────────────────────
+    #     if self.accelerator.is_main_process:
+    #         self.vllm_client.reset_prefix_cache()
+    #     _rendez_vous()
+    # @profiling_decorator
+    # def _move_model_to_vllm(self):
+    #     hb_handle = self._start_store_hb_thread()
+    #     try:
+    #         dsp      = self.accelerator.state.deepspeed_plugin
+    #         zero3    = dsp is not None and dsp.zero_stage == 3
+    #         gather   = deepspeed.zero.GatheredParameters if zero3 else nullcontext
+    #         rendez   = torch.distributed.barrier if torch.distributed.is_initialized() else lambda: None
+
+    #         for name, param in self.model.named_parameters():
+
+    #             # all ranks enter / exit the context together
+    #             with gather([param]):
+
+    #                 # ── ① make sure *everybody* has finished the AllGather ──
+
+    #                 if self.accelerator.is_main_process:
+    #                     self.vllm_client.update_named_param(name, param.data)
+
+    #                 # ── ② rank‑0 finished HTTP; others waited; move on   ──
+    #                 rendez()
+
+    #         if self.accelerator.is_main_process:
+    #             self.vllm_client.reset_prefix_cache()
+
+    #         rendez()            # final sync before leaving the function
+    #     finally:
+    #         # ---- stop the heartbeat no matter what ----
+    #         if hb_handle is not None:
+    #             stop_event, thread = hb_handle
+    #             stop_event.set()
+    #             thread.join()
+                        # @profiling_decorator
+                        # def _move_model_to_vllm(self):
+                        #     hb_handle = self._start_store_hb_thread()        # ← keeps TCPStore alive
+                        #     try:
+                        #         dsp    = self.accelerator.state.deepspeed_plugin
+                        #         zero3  = dsp is not None and dsp.zero_stage == 3
+                        #         gather = deepspeed.zero.GatheredParameters if zero3 else nullcontext
+
+                        #         # ── 1.  Rank-0 gathers *all* params once; others gather & wait ──
+                        #         params = list(self.model.named_parameters())
+
+                        #         with gather([p for _, p in params]):         # shard-aware gather
+                        #             if self.accelerator.is_main_process:     # only rank-0 pushes
+                        #                 for name, param in params:
+                        #                     self.vllm_client.update_named_param(name, param.data)
+
+                        #         # ── 2.  One barrier so non-main ranks know rank-0 is done ──
+                        #         if torch.distributed.is_initialized():
+                        #             torch.distributed.barrier()
+
+                        #         # ── 3.  Optional: clear vLLM cache ──
+                        #         if self.accelerator.is_main_process:
+                        #             self.vllm_client.reset_prefix_cache()
+
+                        #     finally:
+                        #         # always stop the heartbeat thread
+                        #         if hb_handle is not None:
+                        #             stop_event, thread = hb_handle
+                        #             stop_event.set()
+                        #             thread.join()
+
+# @profiling_decorator
+# def _move_model_to_vllm(self):
+#     # ── 0.  Start the TCP-store heartbeat (rank-0 only) ──────────────────
+#     hb_handle = self._start_store_hb_thread()
+
+#     try:
+#         dsp    = self.accelerator.state.deepspeed_plugin
+#         zero3  = dsp is not None and dsp.zero_stage == 3
+#         gather = deepspeed.zero.GatheredParameters if zero3 else nullcontext
+
+#         # ── 1.  Stream every tensor separately ────────────────────────────
+#         for name, param in self.model.named_parameters():
+#             # ZeRO-3:   gather the shards of *this* param only
+#             # Non-ZeRO: acts as a no-op (nullcontext)
+#             with gather([param]):
+#                 if self.accelerator.is_main_process:
+#                     # push the fully-materialised tensor to vLLM
+#                     self.vllm_client.update_named_param(name, param.data)
+
+#         # ── 2.  Let non-main ranks know rank-0 is done streaming ─────────
+#         if torch.distributed.is_initialized():
+#             torch.distributed.barrier()
+
+#         # ── 3.  Reset vLLM prefix cache (rank-0 only) ────────────────────
+#         if self.accelerator.is_main_process:
+#             self.vllm_client.reset_prefix_cache()
+
+#     finally:
+#         # ── 4.  Always stop the heartbeat thread ─────────────────────────
+#         if hb_handle is not None:
+#             stop_event, thread = hb_handle
+#             stop_event.set()
+#             thread.join()
+
     @profiling_decorator
     def _move_model_to_vllm(self):
-        # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        # ── 0.  keep the TCPStore alive while rank-0 streams tensors ──
+        hb_handle = self._start_store_hb_thread()
 
-        if is_peft_model(self.model):
-            # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
-            # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
+        try:
+            dsp     = self.accelerator.state.deepspeed_plugin
+            zero3   = dsp is not None and dsp.zero_stage == 3
+            gather  = deepspeed.zero.GatheredParameters if zero3 else nullcontext
+            barrier = torch.distributed.barrier if torch.distributed.is_initialized() else lambda: None
 
-                # Update vLLM weights while parameters are gathered
-                for name, param in self.model.named_parameters():
-                    # When using PEFT, we need to recover the original parameter name and discard some parameters
-                    name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                    if self.model.prefix in name:
-                        continue
-                    # When module to save, remove its prefix and discard the original module
-                    if "original_module" in name:
-                        continue
-                    name = name.replace("modules_to_save.default.", "")
-
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
-
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
-        else:
-            # For non-PEFT models, simply gather and update each parameter individually.
+            # ── 1.  stream each parameter one-by-one ────────────────────────
             for name, param in self.model.named_parameters():
-                with gather_if_zero3([param]):
+                with gather([param]):                    # shards → full tensor
                     if self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
 
-        # Reset cache on main process
-        # HUGE potential problem: prefix cache reset is [[[[DISABLED!!]]]]
-        if self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
+                barrier()                               # <-- keep ranks in sync
+
+            # ── 2.  reset vLLM prefix cache once per weight load ────────────
+            if self.accelerator.is_main_process:
+                self.vllm_client.reset_prefix_cache()
+
+        finally:
+            # ── 3.  stop the heartbeat thread even on exceptions ────────────
+            if hb_handle is not None:
+                stop_event, thread = hb_handle
+                stop_event.set()
+                thread.join()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
@@ -664,77 +909,195 @@ class GRPOTrainer(Trainer):
             inputs = self._generate_and_score_completions(inputs)
         return inputs
 
+    # def _generate_and_score_completions(
+    #     self, inputs: dict[str, Union[torch.Tensor, Any]]
+    # ) -> dict[str, Union[torch.Tensor, Any]]:
+    #     device = self.accelerator.device
+    #     prompts = [x["prompt"] for x in inputs]
+    #     prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+    #     prompt_inputs = self.processing_class(
+    #         text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+    #     )
+    #     prompt_inputs = super()._prepare_inputs(prompt_inputs)
+    #     prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+    #     if self.max_prompt_length is not None:
+    #         prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+    #         prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+
+    #     # Generate completions using either vLLM or regular generation
+    #     if self.args.use_vllm:
+    #         # First, have main process load weights if needed
+    #         if self.state.global_step != self._last_loaded_step:
+    #             self._move_model_to_vllm()
+    #             self._last_loaded_step = self.state.global_step
+
+    #         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+    #         all_prompts_text = gather_object(prompts_text)
+
+    #         # # make sure everyone reaches this point before rank-0 generates
+    #         # self.accelerator.wait_for_everyone()                 ### NEW ###
+
+    #         if self.accelerator.is_main_process:
+    #             # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+    #             # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+    #             # prompt individually.
+    #             ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+    #             with profiling_context(self, "vLLM.generate"):
+    #                 completion_ids = self.vllm_client.generate(
+    #                     prompts=ordered_set_of_prompts,
+    #                     n=self.num_generations,
+    #                     repetition_penalty=self.repetition_penalty,
+    #                     temperature=self.temperature,
+    #                     top_p=self.top_p,
+    #                     top_k=-1 if self.top_k is None else self.top_k,
+    #                     min_p=0.0 if self.min_p is None else self.min_p,
+    #                     max_tokens=self.max_completion_length,
+    #                     guided_decoding_regex=self.guided_decoding_regex,
+    #                 )
+    #         else:
+    #             completion_ids = [None] * len(all_prompts_text)
+
+    #         # ensure every rank is *done* with Python work before we post the BROADCAST
+    #         # self.accelerator.wait_for_everyone()                 ### NEW ###
+    #         # Broadcast the completions from the main process to all processes, ensuring each process receives its
+    #         # corresponding slice.
+    #         completion_ids = broadcast_object_list(completion_ids, from_process=0)
+    #         process_slice = slice(
+    #             self.accelerator.process_index * len(prompts),
+    #             (self.accelerator.process_index + 1) * len(prompts),
+    #         )
+    #         completion_ids = completion_ids[process_slice]
+
+    #         self.accelerator.wait_for_everyone()         #  optional, but harmless
+    #         # Pad the completions, and concatenate them with the prompts
+    #         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+    #         completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+    #         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+    #     else:
+    #         # Regular generation path
+    #         with unwrap_model_for_generation(
+    #             self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+    #         ) as unwrapped_model:
+    #             prompt_completion_ids = unwrapped_model.generate(
+    #                 prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+    #             )
+
+    #         # Compute prompt length and extract completion ids
+    #         prompt_length = prompt_ids.size(1)
+    #         prompt_ids = prompt_completion_ids[:, :prompt_length]
+    #         completion_ids = prompt_completion_ids[:, prompt_length:]
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+
+        # ----- build prompt tensors -------------------------------------------------
+        prompts       = [x["prompt"] for x in inputs]
+        prompts_text  = [
+            maybe_apply_chat_template(example, self.processing_class)["prompt"]
+            for example in inputs
+        ]
         prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+            text=prompts_text,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+            prompt_ids   = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask  = prompt_mask[:, -self.max_prompt_length :]
 
-        # Generate completions using either vLLM or regular generation
+        # ---------------------------------------------------------------------------
+        #            vLLM path (faster generation via the vLLM server)
+        # ---------------------------------------------------------------------------
         if self.args.use_vllm:
-            # First, have main process load weights if needed
+            # 1. Move model shards to vLLM if we've advanced to a new step
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+            # 2. Gather *all* prompts onto every rank (cheap, host-only op)
             all_prompts_text = gather_object(prompts_text)
+
+            # #  a) kick-off heartbeat on non-main ranks
+            # if not self.accelerator.is_main_process:
+            #     # spawn only once per call
+            #     if self._hb_thread is None or not self._hb_thread.is_alive():
+            #         self._hb_done.clear()
+            #         self._hb_thread = threading.Thread(
+            #             target=self._nccl_heartbeat, daemon=True
+            #         )
+            #         self._hb_thread.start()
+
+            # 3. Main process does the heavy CUDA work; others prepare empty slots
             if self.accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
                     completion_ids = self.vllm_client.generate(
-                        prompts=ordered_set_of_prompts,
-                        n=self.num_generations,
-                        repetition_penalty=self.repetition_penalty,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        top_k=-1 if self.top_k is None else self.top_k,
-                        min_p=0.0 if self.min_p is None else self.min_p,
-                        max_tokens=self.max_completion_length,
-                        guided_decoding_regex=self.guided_decoding_regex,
+                        prompts            = ordered_set_of_prompts,
+                        n                  = self.num_generations,
+                        repetition_penalty = self.repetition_penalty,
+                        temperature        = self.temperature,
+                        top_p              = self.top_p,
+                        top_k              = -1 if self.top_k is None else self.top_k,
+                        min_p              = 0.0 if self.min_p is None else self.min_p,
+                        max_tokens         = self.max_completion_length,
+                        guided_decoding_regex = self.guided_decoding_regex,
                     )
             else:
                 completion_ids = [None] * len(all_prompts_text)
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
-            # corresponding slice.
+
+            # -------------------------------------------------------------------
+            # 4. ***Critical fix***  Barrier before the NCCL broadcast so that
+            #    ranks 1-3 don’t enter the collective until rank-0 has finished
+            #    generating.
+            # -------------------------------------------------------------------
+            self.accelerator.wait_for_everyone()          # ← NEW
+
+            # 5. Broadcast the list of completions from rank-0 to everyone
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            #  b) stop heartbeat now that collective traffic resumed
+            if not self.accelerator.is_main_process:
+                self._hb_done.set()            # tells thread to exit
+                if self._hb_thread is not None:
+                    self._hb_thread.join()
+
+            # 6. Slice out this rank’s portion
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
             )
             completion_ids = completion_ids[process_slice]
 
-            # Pad the completions, and concatenate them with the prompts
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            # 7. Convert to tensor & concatenate with prompts
+            completion_ids         = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids         = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_completion_ids  = torch.cat([prompt_ids, completion_ids], dim=1)
+
+        # ---------------------------------------------------------------------------
+        #            regular generation path (no vLLM)
+        # ---------------------------------------------------------------------------
         else:
-            # Regular generation path
             with unwrap_model_for_generation(
-                self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                self.model_wrapped,
+                self.accelerator,
+                gather_deepspeed3_params=self.args.ds3_gather_for_generation,
             ) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
-                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                    prompt_ids,
+                    attention_mask=prompt_mask,
+                    generation_config=self.generation_config,
                 )
 
-            # Compute prompt length and extract completion ids
-            prompt_length = prompt_ids.size(1)
-            prompt_ids = prompt_completion_ids[:, :prompt_length]
-            completion_ids = prompt_completion_ids[:, prompt_length:]
-
+            # split prompt / completion portions
+            prompt_length   = prompt_ids.size(1)
+            prompt_ids      = prompt_completion_ids[:, :prompt_length]
+            completion_ids  = prompt_completion_ids[:, prompt_length:]
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)

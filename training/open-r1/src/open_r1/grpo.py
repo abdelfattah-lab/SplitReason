@@ -30,7 +30,6 @@ from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -137,6 +136,18 @@ def main(script_args, training_args, model_args):
         callbacks=get_callbacks(training_args, model_args),
         processing_class=tokenizer,
     )
+
+    # if torch.distributed.is_initialized():
+    #     print(
+    #         f"[rank {trainer.accelerator.process_index}] NCCL heartbeat =",
+    #         os.getenv("TORCH_NCCL_ENABLE_MONITORING"),
+    #         "• collective-timeout =", os.getenv("TORCH_DISTRIBUTED_DEFAULT_TIMEOUT"),
+    #         flush=True,
+    #     )
+    #     exit(0)
+    # else:
+    #     print("[rank 0] NCCL heartbeat =", os.getenv("TORCH_NCCL_ENABLE_MONITORING"), flush=True)
+    #     exit(0)
 
     ###############
     # Training loop
