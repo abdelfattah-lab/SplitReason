@@ -1,5 +1,5 @@
 # Model arguments
-model_name_or_path: akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpeculativeReasoner
+model_name_or_path: akhauriyash/E2EGRPO_bm14B_32Gen_8GAcc_2K_2xAccF
 # model_name_or_path: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
 model_revision: main
 torch_dtype: bfloat16
@@ -20,11 +20,11 @@ system_prompt: "You are a helpful AI Assistant that provides well-reasoned and d
 bf16: true
 use_vllm: true
 do_eval: false
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-hub_model_id: E2EGRPO_bm14B_36Gen_2K_2xAccF
+hub_model_id: E2EGRPO_bm14B_32Gen_8GAcc_2K_2xAccF
 # hub_model_id: DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1_Math_SpecR_GRPO_Mini-MiniSet_14BDrafter
 hub_strategy: every_save
 learning_rate: 1.0e-06
@@ -40,13 +40,13 @@ max_prompt_length: 512
 max_completion_length: 2048
 max_steps: 400
 # num_generations: 4
-num_generations: 8
+num_generations: 32
 num_train_epochs: 1
-output_dir: data/E2EGRPO_bm14B_36Gen_2K_2xAccF
+output_dir: data/E2EGRPO_bm14B_32Gen_8GAcc_2K_2xAccF
 # output_dir: data/DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1_Math_SpecR_GRPO_Mini-MiniSet_14BDrafter
 overwrite_output_dir: true
-per_device_eval_batch_size: 2
-per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+per_device_train_batch_size: 8
 push_to_hub: true
 report_to:
 - wandb
