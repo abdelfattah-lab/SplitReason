@@ -278,6 +278,8 @@ class GRPOTrainer(Trainer):
             model_name = model_name.split("/")[-1]
             args = GRPOConfig(f"{model_name}-GRPO")
 
+        self.pg_cpu = torch.distributed.new_group(backend="gloo")
+
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
@@ -410,7 +412,7 @@ class GRPOTrainer(Trainer):
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
         # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
         # "Could not estimate the number of tokens of the input, floating-point operations will not be computed." To
-        # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
+        # suppress this warning, we set the "estimate_tokesns" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
@@ -864,6 +866,87 @@ class GRPOTrainer(Trainer):
 #             stop_event.set()
 #             thread.join()
 
+def _init_bigmodel_token_ids(self):
+    """
+    Lazily initialize token ID patterns for <bigmodel> and </bigmodel>.
+    Works even if they are multi-token sequences.
+    """
+    if getattr(self, "big_open_ids", None) is not None:
+        # Already initialized
+        return
+
+    tok = self.processing_class  # tokenizer
+    # These calls return a dict with "input_ids": [ids...]
+    self.big_open_ids = tok(
+        text="<bigmodel>",
+        add_special_tokens=False,
+    )["input_ids"]
+    self.big_close_ids = tok(
+        text="</bigmodel>",
+        add_special_tokens=False,
+    )["input_ids"]
+
+def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
+    """
+    Given completion_ids of shape (B, T), return a mask of the same shape:
+
+      small_token_mask[b, t] = 1  -> token at (b, t) comes from the *small* model
+      small_token_mask[b, t] = 0  -> token at (b, t) is inside a <bigmodel> ... </bigmodel> span
+
+    The <bigmodel> and </bigmodel> tags themselves are treated as small-model tokens
+    (i.e. mask=1), so they still get gradient.
+    """
+    self._init_bigmodel_token_ids()
+
+    device = completion_ids.device
+    bsz, seqlen = completion_ids.shape
+
+    # Default: everything is small-model
+    mask = torch.ones_like(completion_ids, dtype=torch.long, device=device)
+
+    open_ids = self.big_open_ids
+    close_ids = self.big_close_ids
+    L_open = len(open_ids)
+    L_close = len(close_ids)
+
+    # If for some reason we can't find the tags, just return the all-ones mask
+    if L_open == 0 or L_close == 0:
+        return mask
+
+    open_ids_tensor = torch.tensor(open_ids, dtype=torch.long, device=device)
+    close_ids_tensor = torch.tensor(close_ids, dtype=torch.long, device=device)
+
+    for b in range(bsz):
+        seq = completion_ids[b]
+        inside = False
+        i = 0
+        while i < seqlen:
+            # Match `<bigmodel>`
+            if (not inside
+                and i + L_open <= seqlen
+                and torch.equal(seq[i : i + L_open], open_ids_tensor)):
+                # Tag itself stays small (mask=1); we just flip the state
+                i += L_open
+                inside = True
+                continue
+
+            # Match `</bigmodel>`
+            if (inside
+                and i + L_close <= seqlen
+                and torch.equal(seq[i : i + L_close], close_ids_tensor)):
+                # Tag itself stays small; end big-model span
+                i += L_close
+                inside = False
+                continue
+
+            # Inside big-model span → mask out this token
+            if inside:
+                mask[b, i] = 0
+
+            i += 1
+
+    return mask
+
     @profiling_decorator
     def _move_model_to_vllm(self):
         # ── 0.  keep the TCPStore alive while rank-0 streams tensors ──
@@ -1057,10 +1140,16 @@ class GRPOTrainer(Trainer):
             #    ranks 1-3 don’t enter the collective until rank-0 has finished
             #    generating.
             # -------------------------------------------------------------------
+            # torch.distributed.barrier()
+
             self.accelerator.wait_for_everyone()          # ← NEW
 
             # 5. Broadcast the list of completions from rank-0 to everyone
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            # completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            
+            completion_ids = broadcast_object_list(
+                completion_ids, from_process=0, group=self.pg_cpu
+            )
             #  b) stop heartbeat now that collective traffic resumed
             if not self.accelerator.is_main_process:
                 self._hb_done.set()            # tells thread to exit
@@ -1104,6 +1193,8 @@ class GRPOTrainer(Trainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        small_token_mask = self._build_small_token_mask(completion_ids)
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
@@ -1264,6 +1355,7 @@ class GRPOTrainer(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "small_token_mask": small_token_mask,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
@@ -1282,6 +1374,20 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        # ------------------------------------------------------------------
+        small_token_mask = inputs.get("small_token_mask", None)
+        if small_token_mask is not None:
+            # both are (B, T_completion); multiplication keeps type long/int
+            effective_mask = completion_mask * small_token_mask
+        else:
+            effective_mask = completion_mask
+
+        mask_sum = effective_mask.sum()
+        if mask_sum == 0:
+            # fallback to avoid NaNs if something weird happens
+            effective_mask = completion_mask
+            mask_sum = effective_mask.sum()
+        # ------------------------------------------------------------------
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
@@ -1292,8 +1398,6 @@ class GRPOTrainer(Trainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
-        # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
-        # _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
@@ -1302,19 +1406,50 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+
+        # *** Use effective_mask instead of completion_mask ***
+        loss = (per_token_loss * effective_mask).sum() / mask_sum
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+            mean_kl = (per_token_kl * effective_mask).sum() / mask_sum
+            self._metrics[mode]["kl"].append(
+                self.accelerator.gather_for_metrics(mean_kl).mean().item()
+            )
 
         is_clipped = (per_token_loss1 < per_token_loss2).float()
-        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+        clip_ratio = (is_clipped * effective_mask).sum() / mask_sum
+        self._metrics[mode]["clip_ratio"].append(
+            self.accelerator.gather_for_metrics(clip_ratio).mean().item()
+        )
         return loss
+        # # Compute the loss
+        # advantages = inputs["advantages"]
+        # # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
+        # # _generate_and_score_completions) and use per_token_logps.detach() instead.
+        # old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+        # coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        # coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        # per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        # per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        # per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        # if self.beta != 0.0:
+        #     per_token_loss = per_token_loss + self.beta * per_token_kl
+        # loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+
+        # # Log the metrics
+        # mode = "eval" if self.control.should_evaluate else "train"
+
+        # if self.beta != 0.0:
+        #     mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+        #     self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
+        # is_clipped = (per_token_loss1 < per_token_loss2).float()
+        # clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
+        # self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+        # return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
         inputs = self._prepare_inputs(inputs)
