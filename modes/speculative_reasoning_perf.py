@@ -10,8 +10,8 @@ import httpx
 SMALL_CHUNK      = 64
 STREAM_BUCKET    = 8
 NUM_PROBE_TOKENS = 6
-# MAX_TOTAL_TOKENS = 8320 # 4096 + 128 + 4096
-MAX_TOTAL_TOKENS = 2176 # 4096 + 128
+MAX_TOTAL_TOKENS = 8320 # 4096 + 128 + 4096
+# MAX_TOTAL_TOKENS = 2176 # 4096 + 128
 # MAX_TOTAL_TOKENS = 512
 # MAX_TOTAL_TOKENS = 4224 # 4096 + 128
 MAX_BIG_SEGMENT  = 128
@@ -163,7 +163,7 @@ async def _run_speculative_async(
                               .replace(BIG_CLOSE, "")
                               .replace(BIG_OPEN, ""),
                     port=big_port, model=big_model,
-                    temperature=temperature, client=client,
+                    temperature=0.0, client=client,
                 ):
                     bucket.append(tok)
                     tokens_this_stream += 1

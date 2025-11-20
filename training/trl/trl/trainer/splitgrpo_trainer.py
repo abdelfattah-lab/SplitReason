@@ -334,7 +334,21 @@ class SplitGRPOTrainer(Trainer):
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Resize token embeddings just in case
-        model.resize_token_embeddings(len(processing_class))
+        model.resize_token_embeddings(
+            len(processing_class), pad_to_multiple_of=64
+        )
+        # Update the model config to use the new eos & bos tokens
+        if getattr(model, "config", None) is not None:
+            model.config.pad_token_id = processing_class.pad_token_id
+            model.config.bos_token_id = processing_class.bos_token_id
+            model.config.eos_token_id = processing_class.eos_token_id
+        # Update the generation config to use the new eos & bos token
+        if getattr(model, "generation_config", None) is not None:
+            model.generation_config.bos_token_id = processing_class.bos_token_id
+            model.generation_config.eos_token_id = processing_class.eos_token_id
+            model.generation_config.pad_token_id = processing_class.pad_token_id
+
+
         print(f"\n\n\nMODEL TOKEN EMBEDDING RESIZED TO {len(processing_class)}\n\n\n")
         
         # Reward functions

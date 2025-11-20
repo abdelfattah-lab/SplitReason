@@ -52,13 +52,13 @@ reward_funcs:
 - tag_count
 - format
 reward_weights:
-- 1.0
-- 1.0
-- 1.0
+- 3.0
+- 0.5
+- 0.25
 save_strategy: "steps"
 save_steps: 20
 save_total_limit: 1
 seed: 42
 temperature: 0.7
-use_liger_kernel: true
+use_liger_kernel: false
 warmup_ratio: 0.1

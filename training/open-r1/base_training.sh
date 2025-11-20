@@ -13,7 +13,7 @@ python3 ./spec_service.py \
   --spec_reason_perf \
   --big_model deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
   --small_model akhauriyash/DeepSeek-R1-Distill-Qwen-1.5B-SpeculativeReasoner \
-  --max_tokens 16384 \
+  --max_tokens 8192 \
   --big_model_gpus 0 \
   --small_model_gpus 1 \
   --big_model_port 8002 \
@@ -24,7 +24,7 @@ python3 ./spec_service.py \
 CUDA_VISIBLE_DEVICES=2,3 ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes 2 \
     src/open_r1/grpo.py --config recipes/DeepSeek-R1-Distill-Qwen-1.5B/grpo/config_demo.yaml \
-    --wandb_project SpeculativeReasoning --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO-OpenR1_Math_SpecR_GRPO_Mini-H100
+    --wandb_project SplitReason --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO
 
 ###### 32B Drafter Model Training Run
 

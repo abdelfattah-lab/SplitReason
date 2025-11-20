@@ -20,6 +20,7 @@ from contextlib import nullcontext
 from typing import Any, Callable, Optional, Sized, Union
 import threading
 import datetime, torch.distributed as dist
+import threading, time, torch.distributed as dist
 
 import torch
 import torch.utils.data
@@ -278,8 +279,11 @@ class GRPOTrainer(Trainer):
             model_name = model_name.split("/")[-1]
             args = GRPOConfig(f"{model_name}-GRPO")
 
-        self.pg_cpu = torch.distributed.new_group(backend="gloo")
+        # self.pg_cpu = torch.distributed.new_group(backend="gloo")
 
+        # Will optionally be created later, once Accelerate has initialized
+        # the default process group.
+        self.pg_cpu = None
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
@@ -338,7 +342,21 @@ class GRPOTrainer(Trainer):
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # # Resize token embeddings just in case
-        model.resize_token_embeddings(len(processing_class))
+        # model.resize_token_embeddings(len(processing_class))
+        model.resize_token_embeddings(
+            len(processing_class), pad_to_multiple_of=64
+        )
+        # Update the model config to use the new eos & bos tokens
+        if getattr(model, "config", None) is not None:
+            model.config.pad_token_id = processing_class.pad_token_id
+            model.config.bos_token_id = processing_class.bos_token_id
+            model.config.eos_token_id = processing_class.eos_token_id
+        # Update the generation config to use the new eos & bos token
+        if getattr(model, "generation_config", None) is not None:
+            model.generation_config.bos_token_id = processing_class.bos_token_id
+            model.generation_config.eos_token_id = processing_class.eos_token_id
+            model.generation_config.pad_token_id = processing_class.pad_token_id
+
         # print(f"\n\n\nMODEL TOKEN EMBEDDING RESIZED TO {len(processing_class)}\n\n\n")
         
         # Reward functions
@@ -439,17 +457,9 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+        
+
         # import torch.distributed as dist, datetime
-
-        # if dist.is_initialized():
-        #     # _get_default_group() exists in all recent Torch versions
-        #     pg = dist.distributed_c10d._get_default_group()
-        #     print(f"[rank {dist.get_rank()}] PG timeout →", pg._timeout)  # datetime.timedelta
-
-        # import torch.distributed as dist
-        # if dist.is_initialized():
-        #     print("PG timeout", dist.get_backend_timeout())  # should print 4:00:00
-
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
         global_batch_size = args.per_device_train_batch_size * num_processes
@@ -499,7 +509,10 @@ class GRPOTrainer(Trainer):
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
-            self.accelerator.wait_for_everyone()
+            # print(f"{dist.get_rank()}p0\n"*50)
+            
+            # self.accelerator.wait_for_everyone()
+            # print(f"{dist.get_rank()}p1\n"*50)
         else:
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
@@ -519,23 +532,30 @@ class GRPOTrainer(Trainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+        # print(f"{dist.get_rank()}p2\n"*50)
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
+       
+        # print(f"{dist.get_rank()}p3\n"*50)
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+       
+        # print(f"{dist.get_rank()}p4\n"*50)
 
+
+        # exit()
         if args.sync_ref_model:
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-                        
+                 
     def _nccl_heartbeat(self, period=5):
         buf = torch.zeros(1, device="cuda")
         while not self._hb_done.is_set():
@@ -549,7 +569,6 @@ class GRPOTrainer(Trainer):
         ranks blocked in `dist.barrier()` don’t hit the 30-min idle timeout.
         Returns (stop_event, thread) or None.
         """
-        import threading, time, torch.distributed as dist
 
         if not dist.is_initialized() or dist.get_rank() != 0:
             return None                           # nothing to do on non-main ranks
@@ -668,284 +687,131 @@ class GRPOTrainer(Trainer):
         logits = logits / self.temperature
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
-    # @profiling_decorator
-    # def _move_model_to_vllm(self):
-    #     # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
-    #     deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-    #     zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-    #     gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+    def _init_bigmodel_token_ids(self):
+        """
+        Lazily initialize token ID patterns for <bigmodel> and </bigmodel>.
+        Works even if they are multi-token sequences.
+        """
+        if getattr(self, "big_open_ids", None) is not None:
+            # Already initialized
+            return
 
-    #     if is_peft_model(self.model):
-    #         # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
-    #         # adapters in a sharded manner is not supported.
-    #         with gather_if_zero3(list(self.model.parameters())):
-    #             self.model.merge_adapter()
+        tok = self.processing_class  # tokenizer
+        # These calls return a dict with "input_ids": [ids...]
+        self.big_open_ids = tok(
+            text="<bigmodel>",
+            add_special_tokens=False,
+        )["input_ids"]
+        self.big_close_ids = tok(
+            text="</bigmodel>",
+            add_special_tokens=False,
+        )["input_ids"]
 
-    #             # Update vLLM weights while parameters are gathered
-    #             for name, param in self.model.named_parameters():
-    #                 # When using PEFT, we need to recover the original parameter name and discard some parameters
-    #                 name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-    #                 if self.model.prefix in name:
-    #                     continue
-    #                 # When module to save, remove its prefix and discard the original module
-    #                 if "original_module" in name:
-    #                     continue
-    #                 name = name.replace("modules_to_save.default.", "")
+    def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Given completion_ids of shape (B, T), return a mask of the same shape:
 
-    #                 if self.accelerator.is_main_process:
-    #                     self.vllm_client.update_named_param(name, param.data)
+        small_token_mask[b, t] = 1  -> token at (b, t) comes from the *small* model
+        small_token_mask[b, t] = 0  -> token at (b, t) is inside a <bigmodel> ... </bigmodel> span
 
-    #             # Unmerge adapters while parameters are still gathered
-    #             self.model.unmerge_adapter()
-    #             # Parameters will automatically be repartitioned when exiting the context
-    #     else:
-    #         # For non-PEFT models, simply gather and update each parameter individually.
-    #         for name, param in self.model.named_parameters():
-    #             with gather_if_zero3([param]):
-    #                 if self.accelerator.is_main_process:
-    #                     self.vllm_client.update_named_param(name, param.data)
-    #             if torch.distributed.is_initialized():
-    #                 torch.distributed.barrier()
+        The <bigmodel> and </bigmodel> tags themselves are treated as small-model tokens
+        (i.e. mask=1), so they still get gradient.
+        """
+        self._init_bigmodel_token_ids()
 
-    #     # Reset cache on main process
-    #     # HUGE potential problem: prefix cache reset is [[[[DISABLED!!]]]]
-    #     if self.accelerator.is_main_process:
-    #         self.vllm_client.reset_prefix_cache()
-    #     if torch.distributed.is_initialized():
-    #         torch.distributed.barrier()
-        
-    # @profiling_decorator
-    # def _move_model_to_vllm(self):
-    #     # Decide whether we are in ZeRO‑3 or not
-    #     dsp = self.accelerator.state.deepspeed_plugin
-    #     zero3 = dsp is not None and dsp.zero_stage == 3
-    #     gather_if_zero3 = deepspeed.zero.GatheredParameters if zero3 else nullcontext
+        device = completion_ids.device
+        bsz, seqlen = completion_ids.shape
 
-    #     # ❶ Helper so we don’t repeat the same three lines twice
-    #     def _rendez_vous():
-    #         if torch.distributed.is_initialized():
-    #             torch.distributed.barrier()
+        # Default: everything is small-model
+        mask = torch.ones_like(completion_ids, dtype=torch.long, device=device)
 
-    #     # ───────────────────────────────────────────────────────
-    #     # 2. PEFT path  (all params gathered once)
-    #     # ───────────────────────────────────────────────────────
-    #     if is_peft_model(self.model):
-    #         with gather_if_zero3(list(self.model.parameters())):
-    #             self.model.merge_adapter()
+        open_ids = self.big_open_ids
+        close_ids = self.big_close_ids
+        L_open = len(open_ids)
+        L_close = len(close_ids)
 
-    #             for name, param in self.model.named_parameters():
-    #                 _rendez_vous()                       # BEFORE tensor
+        # If for some reason we can't find the tags, just return the all-ones mask
+        if L_open == 0 or L_close == 0:
+            return mask
 
-    #                 # restore original names / skip helper params
-    #                 name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-    #                 if self.model.prefix in name or "original_module" in name:
-    #                     continue
-    #                 name = name.replace("modules_to_save.default.", "")
+        open_ids_tensor = torch.tensor(open_ids, dtype=torch.long, device=device)
+        close_ids_tensor = torch.tensor(close_ids, dtype=torch.long, device=device)
 
-    #                 if self.accelerator.is_main_process:
-    #                     self.vllm_client.update_named_param(name, param.data)
+        for b in range(bsz):
+            seq = completion_ids[b]
+            inside = False
+            i = 0
+            while i < seqlen:
+                # Match `<bigmodel>`
+                if (not inside
+                    and i + L_open <= seqlen
+                    and torch.equal(seq[i : i + L_open], open_ids_tensor)):
+                    # Tag itself stays small (mask=1); we just flip the state
+                    i += L_open
+                    inside = True
+                    continue
 
-    #                 _rendez_vous()                       # AFTER tensor
+                # Match `</bigmodel>`
+                if (inside
+                    and i + L_close <= seqlen
+                    and torch.equal(seq[i : i + L_close], close_ids_tensor)):
+                    # Tag itself stays small; end big-model span
+                    i += L_close
+                    inside = False
+                    continue
 
-    #             self.model.unmerge_adapter()
+                # Inside big-model span → mask out this token
+                if inside:
+                    mask[b, i] = 0
 
-    #     # ───────────────────────────────────────────────────────
-    #     # 3. Non‑PEFT path  (each param gathered individually
-    #     #                    in ZeRO‑3, or no gather in ZeRO‑2)
-    #     # ───────────────────────────────────────────────────────
-    #     else:
-    #         for name, param in self.model.named_parameters():
-    #             _rendez_vous()                           # BEFORE tensor
+                i += 1
 
-    #             with gather_if_zero3([param]):
-    #                 if self.accelerator.is_main_process:
-    #                     self.vllm_client.update_named_param(name, param.data)
-
-    #             _rendez_vous()                           # AFTER tensor
-
-    #     # ───────────────────────────────────────────────────────
-    #     # 4. Flush KV cache once, then final sync
-    #     # ───────────────────────────────────────────────────────
-    #     if self.accelerator.is_main_process:
-    #         self.vllm_client.reset_prefix_cache()
-    #     _rendez_vous()
-    # @profiling_decorator
-    # def _move_model_to_vllm(self):
-    #     hb_handle = self._start_store_hb_thread()
-    #     try:
-    #         dsp      = self.accelerator.state.deepspeed_plugin
-    #         zero3    = dsp is not None and dsp.zero_stage == 3
-    #         gather   = deepspeed.zero.GatheredParameters if zero3 else nullcontext
-    #         rendez   = torch.distributed.barrier if torch.distributed.is_initialized() else lambda: None
-
-    #         for name, param in self.model.named_parameters():
-
-    #             # all ranks enter / exit the context together
-    #             with gather([param]):
-
-    #                 # ── ① make sure *everybody* has finished the AllGather ──
-
-    #                 if self.accelerator.is_main_process:
-    #                     self.vllm_client.update_named_param(name, param.data)
-
-    #                 # ── ② rank‑0 finished HTTP; others waited; move on   ──
-    #                 rendez()
-
-    #         if self.accelerator.is_main_process:
-    #             self.vllm_client.reset_prefix_cache()
-
-    #         rendez()            # final sync before leaving the function
-    #     finally:
-    #         # ---- stop the heartbeat no matter what ----
-    #         if hb_handle is not None:
-    #             stop_event, thread = hb_handle
-    #             stop_event.set()
-    #             thread.join()
-                        # @profiling_decorator
-                        # def _move_model_to_vllm(self):
-                        #     hb_handle = self._start_store_hb_thread()        # ← keeps TCPStore alive
-                        #     try:
-                        #         dsp    = self.accelerator.state.deepspeed_plugin
-                        #         zero3  = dsp is not None and dsp.zero_stage == 3
-                        #         gather = deepspeed.zero.GatheredParameters if zero3 else nullcontext
-
-                        #         # ── 1.  Rank-0 gathers *all* params once; others gather & wait ──
-                        #         params = list(self.model.named_parameters())
-
-                        #         with gather([p for _, p in params]):         # shard-aware gather
-                        #             if self.accelerator.is_main_process:     # only rank-0 pushes
-                        #                 for name, param in params:
-                        #                     self.vllm_client.update_named_param(name, param.data)
-
-                        #         # ── 2.  One barrier so non-main ranks know rank-0 is done ──
-                        #         if torch.distributed.is_initialized():
-                        #             torch.distributed.barrier()
-
-                        #         # ── 3.  Optional: clear vLLM cache ──
-                        #         if self.accelerator.is_main_process:
-                        #             self.vllm_client.reset_prefix_cache()
-
-                        #     finally:
-                        #         # always stop the heartbeat thread
-                        #         if hb_handle is not None:
-                        #             stop_event, thread = hb_handle
-                        #             stop_event.set()
-                        #             thread.join()
-
-# @profiling_decorator
-# def _move_model_to_vllm(self):
-#     # ── 0.  Start the TCP-store heartbeat (rank-0 only) ──────────────────
-#     hb_handle = self._start_store_hb_thread()
-
-#     try:
-#         dsp    = self.accelerator.state.deepspeed_plugin
-#         zero3  = dsp is not None and dsp.zero_stage == 3
-#         gather = deepspeed.zero.GatheredParameters if zero3 else nullcontext
-
-#         # ── 1.  Stream every tensor separately ────────────────────────────
-#         for name, param in self.model.named_parameters():
-#             # ZeRO-3:   gather the shards of *this* param only
-#             # Non-ZeRO: acts as a no-op (nullcontext)
-#             with gather([param]):
-#                 if self.accelerator.is_main_process:
-#                     # push the fully-materialised tensor to vLLM
-#                     self.vllm_client.update_named_param(name, param.data)
-
-#         # ── 2.  Let non-main ranks know rank-0 is done streaming ─────────
-#         if torch.distributed.is_initialized():
-#             torch.distributed.barrier()
-
-#         # ── 3.  Reset vLLM prefix cache (rank-0 only) ────────────────────
-#         if self.accelerator.is_main_process:
-#             self.vllm_client.reset_prefix_cache()
-
-#     finally:
-#         # ── 4.  Always stop the heartbeat thread ─────────────────────────
-#         if hb_handle is not None:
-#             stop_event, thread = hb_handle
-#             stop_event.set()
-#             thread.join()
-
-def _init_bigmodel_token_ids(self):
-    """
-    Lazily initialize token ID patterns for <bigmodel> and </bigmodel>.
-    Works even if they are multi-token sequences.
-    """
-    if getattr(self, "big_open_ids", None) is not None:
-        # Already initialized
-        return
-
-    tok = self.processing_class  # tokenizer
-    # These calls return a dict with "input_ids": [ids...]
-    self.big_open_ids = tok(
-        text="<bigmodel>",
-        add_special_tokens=False,
-    )["input_ids"]
-    self.big_close_ids = tok(
-        text="</bigmodel>",
-        add_special_tokens=False,
-    )["input_ids"]
-
-def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
-    """
-    Given completion_ids of shape (B, T), return a mask of the same shape:
-
-      small_token_mask[b, t] = 1  -> token at (b, t) comes from the *small* model
-      small_token_mask[b, t] = 0  -> token at (b, t) is inside a <bigmodel> ... </bigmodel> span
-
-    The <bigmodel> and </bigmodel> tags themselves are treated as small-model tokens
-    (i.e. mask=1), so they still get gradient.
-    """
-    self._init_bigmodel_token_ids()
-
-    device = completion_ids.device
-    bsz, seqlen = completion_ids.shape
-
-    # Default: everything is small-model
-    mask = torch.ones_like(completion_ids, dtype=torch.long, device=device)
-
-    open_ids = self.big_open_ids
-    close_ids = self.big_close_ids
-    L_open = len(open_ids)
-    L_close = len(close_ids)
-
-    # If for some reason we can't find the tags, just return the all-ones mask
-    if L_open == 0 or L_close == 0:
         return mask
 
-    open_ids_tensor = torch.tensor(open_ids, dtype=torch.long, device=device)
-    close_ids_tensor = torch.tensor(close_ids, dtype=torch.long, device=device)
+    def _normalize_vllm_completion_ids(
+        self,
+        completion_ids,
+        expected_global_len: int,
+        num_unique_prompts: int,
+    ):
+        """
+        Ensure `completion_ids` is a flat list of length `expected_global_len`.
 
-    for b in range(bsz):
-        seq = completion_ids[b]
-        inside = False
-        i = 0
-        while i < seqlen:
-            # Match `<bigmodel>`
-            if (not inside
-                and i + L_open <= seqlen
-                and torch.equal(seq[i : i + L_open], open_ids_tensor)):
-                # Tag itself stays small (mask=1); we just flip the state
-                i += L_open
-                inside = True
-                continue
+        Supports:
+          - Flat: [global_B] (already correct)
+          - Nested: [num_unique_prompts][num_generations] -> we flatten first two dims.
 
-            # Match `</bigmodel>`
-            if (inside
-                and i + L_close <= seqlen
-                and torch.equal(seq[i : i + L_close], close_ids_tensor)):
-                # Tag itself stays small; end big-model span
-                i += L_close
-                inside = False
-                continue
+        Raises a RuntimeError with a clear message if the shape is unexpected.
+        """
 
-            # Inside big-model span → mask out this token
-            if inside:
-                mask[b, i] = 0
+        # Case 1: already the right length (flat list of size global_B)
+        if len(completion_ids) == expected_global_len:
+            return completion_ids
 
-            i += 1
+        # Case 2: may be [num_unique_prompts][num_generations, ...]
+        if len(completion_ids) == num_unique_prompts:
+            flat = []
+            for group in completion_ids:
+                if not isinstance(group, (list, tuple)):
+                    raise RuntimeError(
+                        "vLLM client returned unexpected completion structure: "
+                        f"element has type {type(group)}, expected list/tuple."
+                    )
+                flat.extend(group)
 
-    return mask
+            if len(flat) != expected_global_len:
+                raise RuntimeError(
+                    f"After flattening vLLM outputs we have {len(flat)} completions, "
+                    f"but expected {expected_global_len} (len(all_prompts_text))."
+                )
+            return flat
+
+        # Anything else is inconsistent with the GRPOTrainer expectations
+        raise RuntimeError(
+            f"vLLM client returned {len(completion_ids)} completions, but expected either "
+            f"{expected_global_len} (global prompts) or {num_unique_prompts} (unique prompts). "
+            "This would deadlock broadcast_object_list."
+        )
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -992,84 +858,6 @@ def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
             inputs = self._generate_and_score_completions(inputs)
         return inputs
 
-    # def _generate_and_score_completions(
-    #     self, inputs: dict[str, Union[torch.Tensor, Any]]
-    # ) -> dict[str, Union[torch.Tensor, Any]]:
-    #     device = self.accelerator.device
-    #     prompts = [x["prompt"] for x in inputs]
-    #     prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-    #     prompt_inputs = self.processing_class(
-    #         text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-    #     )
-    #     prompt_inputs = super()._prepare_inputs(prompt_inputs)
-    #     prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-    #     if self.max_prompt_length is not None:
-    #         prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-    #         prompt_mask = prompt_mask[:, -self.max_prompt_length :]
-
-    #     # Generate completions using either vLLM or regular generation
-    #     if self.args.use_vllm:
-    #         # First, have main process load weights if needed
-    #         if self.state.global_step != self._last_loaded_step:
-    #             self._move_model_to_vllm()
-    #             self._last_loaded_step = self.state.global_step
-
-    #         # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-    #         all_prompts_text = gather_object(prompts_text)
-
-    #         # # make sure everyone reaches this point before rank-0 generates
-    #         # self.accelerator.wait_for_everyone()                 ### NEW ###
-
-    #         if self.accelerator.is_main_process:
-    #             # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-    #             # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-    #             # prompt individually.
-    #             ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-    #             with profiling_context(self, "vLLM.generate"):
-    #                 completion_ids = self.vllm_client.generate(
-    #                     prompts=ordered_set_of_prompts,
-    #                     n=self.num_generations,
-    #                     repetition_penalty=self.repetition_penalty,
-    #                     temperature=self.temperature,
-    #                     top_p=self.top_p,
-    #                     top_k=-1 if self.top_k is None else self.top_k,
-    #                     min_p=0.0 if self.min_p is None else self.min_p,
-    #                     max_tokens=self.max_completion_length,
-    #                     guided_decoding_regex=self.guided_decoding_regex,
-    #                 )
-    #         else:
-    #             completion_ids = [None] * len(all_prompts_text)
-
-    #         # ensure every rank is *done* with Python work before we post the BROADCAST
-    #         # self.accelerator.wait_for_everyone()                 ### NEW ###
-    #         # Broadcast the completions from the main process to all processes, ensuring each process receives its
-    #         # corresponding slice.
-    #         completion_ids = broadcast_object_list(completion_ids, from_process=0)
-    #         process_slice = slice(
-    #             self.accelerator.process_index * len(prompts),
-    #             (self.accelerator.process_index + 1) * len(prompts),
-    #         )
-    #         completion_ids = completion_ids[process_slice]
-
-    #         self.accelerator.wait_for_everyone()         #  optional, but harmless
-    #         # Pad the completions, and concatenate them with the prompts
-    #         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-    #         completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-    #         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-    #     else:
-    #         # Regular generation path
-    #         with unwrap_model_for_generation(
-    #             self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-    #         ) as unwrapped_model:
-    #             prompt_completion_ids = unwrapped_model.generate(
-    #                 prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
-    #             )
-
-    #         # Compute prompt length and extract completion ids
-    #         prompt_length = prompt_ids.size(1)
-    #         prompt_ids = prompt_completion_ids[:, :prompt_length]
-    #         completion_ids = prompt_completion_ids[:, prompt_length:]
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
@@ -1098,6 +886,18 @@ def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
         # ---------------------------------------------------------------------------
         #            vLLM path (faster generation via the vLLM server)
         # ---------------------------------------------------------------------------
+        # if self.args.use_vllm:
+        #     # 1. Move model shards to vLLM if we've advanced to a new step
+        #     if self.state.global_step != self._last_loaded_step:
+        #         self._move_model_to_vllm()
+        #         self._last_loaded_step = self.state.global_step
+
+        #     # 2. Gather *all* prompts onto every rank (cheap, host-only op)
+        #     all_prompts_text = gather_object(prompts_text)
+
+        # ---------------------------------------------------------------------------
+        #            vLLM path (faster generation via the vLLM server)
+        # ---------------------------------------------------------------------------
         if self.args.use_vllm:
             # 1. Move model shards to vLLM if we've advanced to a new step
             if self.state.global_step != self._last_loaded_step:
@@ -1106,20 +906,19 @@ def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
 
             # 2. Gather *all* prompts onto every rank (cheap, host-only op)
             all_prompts_text = gather_object(prompts_text)
+            num_global_prompts = len(all_prompts_text)
+            if num_global_prompts % self.num_generations != 0:
+                raise RuntimeError(
+                    f"len(all_prompts_text)={num_global_prompts} is not divisible by "
+                    f"num_generations={self.num_generations}."
+                )
+            num_unique_prompts = num_global_prompts // self.num_generations
 
-            # #  a) kick-off heartbeat on non-main ranks
-            # if not self.accelerator.is_main_process:
-            #     # spawn only once per call
-            #     if self._hb_thread is None or not self._hb_thread.is_alive():
-            #         self._hb_done.clear()
-            #         self._hb_thread = threading.Thread(
-            #             target=self._nccl_heartbeat, daemon=True
-            #         )
-            #         self._hb_thread.start()
 
             # 3. Main process does the heavy CUDA work; others prepare empty slots
             if self.accelerator.is_main_process:
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                assert len(ordered_set_of_prompts) == num_unique_prompts
                 with profiling_context(self, "vLLM.generate"):
                     completion_ids = self.vllm_client.generate(
                         prompts            = ordered_set_of_prompts,
@@ -1132,9 +931,15 @@ def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
                         max_tokens         = self.max_completion_length,
                         guided_decoding_regex = self.guided_decoding_regex,
                     )
-            else:
-                completion_ids = [None] * len(all_prompts_text)
 
+                # 🔴 Critical: normalize to a flat list of length len(all_prompts_text)
+                completion_ids = self._normalize_vllm_completion_ids(
+                    completion_ids,
+                    expected_global_len=num_global_prompts,
+                    num_unique_prompts=num_unique_prompts,
+                )
+            else:
+                completion_ids = [None] * num_global_prompts
             # -------------------------------------------------------------------
             # 4. ***Critical fix***  Barrier before the NCCL broadcast so that
             #    ranks 1-3 don’t enter the collective until rank-0 has finished
@@ -1142,20 +947,33 @@ def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
             # -------------------------------------------------------------------
             # torch.distributed.barrier()
 
-            self.accelerator.wait_for_everyone()          # ← NEW
+            self.accelerator.wait_for_everyone()
 
             # 5. Broadcast the list of completions from rank-0 to everyone
-            # completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            # self.accelerator.wait_for_everyone()          # ← NEW
+
+            # # # 5. Broadcast the list of completions from rank-0 to everyone
             
-            completion_ids = broadcast_object_list(
-                completion_ids, from_process=0, group=self.pg_cpu
-            )
+            # # # NOTE: Accelerate's helper uses the default process group; it
+            # # # does not accept a `group=` argument.
+            # # completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            # # #  b) stop heartbeat now that collective traffic resumed
+            # # if not self.accelerator.is_main_process:
+            # #     self._hb_done.set()            # tells thread to exit
+            # #     if self._hb_thread is not None:
+            # #         self._hb_thread.join()
+
+            # # 5. Broadcast the list of completions from rank-0 to everyone.
+            # # accelerate.utils.broadcast_object_list does *not* support a `group` kwarg;
+            # # it always uses the current default process group under the hood.
+            # completion_ids = broadcast_object_list(completion_ids, from_process=0)
+
             #  b) stop heartbeat now that collective traffic resumed
             if not self.accelerator.is_main_process:
                 self._hb_done.set()            # tells thread to exit
                 if self._hb_thread is not None:
                     self._hb_thread.join()
-
             # 6. Slice out this rank’s portion
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
@@ -1425,31 +1243,6 @@ def _build_small_token_mask(self, completion_ids: torch.Tensor) -> torch.Tensor:
             self.accelerator.gather_for_metrics(clip_ratio).mean().item()
         )
         return loss
-        # # Compute the loss
-        # advantages = inputs["advantages"]
-        # # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
-        # # _generate_and_score_completions) and use per_token_logps.detach() instead.
-        # old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
-        # coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        # coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        # per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        # per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        # per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-        # if self.beta != 0.0:
-        #     per_token_loss = per_token_loss + self.beta * per_token_kl
-        # loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
-
-        # # Log the metrics
-        # mode = "eval" if self.control.should_evaluate else "train"
-
-        # if self.beta != 0.0:
-        #     mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-        #     self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-
-        # is_clipped = (per_token_loss1 < per_token_loss2).float()
-        # clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        # self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
-        # return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
         inputs = self._prepare_inputs(inputs)
