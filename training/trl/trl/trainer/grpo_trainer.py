@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional, Sized, Union
 import threading
 import datetime, torch.distributed as dist
 import threading, time, torch.distributed as dist
+from statistics import mean
 
 import torch
 import torch.utils.data
@@ -344,7 +345,7 @@ class GRPOTrainer(Trainer):
         # # Resize token embeddings just in case
         # model.resize_token_embeddings(len(processing_class))
         model.resize_token_embeddings(
-            len(processing_class), pad_to_multiple_of=64
+            len(processing_class)
         )
         # Update the model config to use the new eos & bos tokens
         if getattr(model, "config", None) is not None:
@@ -1141,32 +1142,116 @@ class GRPOTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}"].append(mean_rewards)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
-
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            prompts_to_log = gather_object(prompts_text)
-            completions_to_log = gather_object(completions_text)
-            rewards_to_log = rewards.tolist()
+            # ---------- gather & FLATTEN prompts/completions to GLOBAL length ----------
+            def _flatten_lists(objs):
+                # accelerate.gather_object returns List[object] (one per rank).
+                # Each object here is a List[str] (local batch). Flatten if needed.
+                if len(objs) > 0 and isinstance(objs[0], list):
+                    out = []
+                    for x in objs:
+                        out.extend(x)
+                    return out
+                return objs
 
-            if self.accelerator.is_main_process:
-                if is_rich_available():
-                    print_prompt_completions_sample(
-                        prompts_to_log,
-                        completions_to_log,
-                        rewards_to_log,
-                        self.state.global_step,
-                    )
-                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    import pandas as pd
+            prompts_lists     = gather_object(prompts_text)
+            completions_lists = gather_object(completions_text)
+            prompts_global     = _flatten_lists(prompts_lists)
+            completions_global = _flatten_lists(completions_lists)
 
-                    # For logging
-                    table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
-                        "prompt": prompts_to_log,
-                        "completion": completions_to_log,
-                        "reward": rewards.tolist(),
-                    }
-                    df = pd.DataFrame(table)
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+            # ---- (a) correctness column from gathered rewards_per_func ----
+            acc_idx = None
+            for i, rf in enumerate(self.reward_funcs):
+                if isinstance(rf, nn.Module):
+                    continue
+                if getattr(rf, "__name__", "") in ("accuracy_reward", "binary_code_reward"):
+                    acc_idx = i
+                    break
+            correct_global = None
+            if acc_idx is not None:
+                acc_vals_global = rewards_per_func[:, acc_idx]  # already gathered earlier
+                correct_global = torch.nan_to_num(acc_vals_global, nan=0.0) >= 0.5  # (B_global,)
+
+            # --- (b) token-based offload metrics; use tensor gather for robustness ---
+            big_token_mask = (1 - small_token_mask) * completion_mask           # (B_local, T)
+            offload_tokens_local = big_token_mask.sum(dim=1)                    # (B_local,)
+            completion_tokens_local = completion_mask.sum(dim=1).clamp_min(1)   # (B_local,)
+            offload_frac_local_t = offload_tokens_local.float() / completion_tokens_local.float()
+
+            offload_frac_global     = gather(offload_frac_local_t)              # (B_global,)
+            offload_tokens_global   = gather(offload_tokens_local)              # (B_global,)
+            completion_tokens_global= gather(completion_tokens_local)           # (B_global,)
+
+            # Convert to python lists for table
+            offload_frac_list = offload_frac_global.detach().cpu().tolist()
+            big_tok_list      = offload_tokens_global.detach().cpu().tolist()
+            comp_tok_list     = completion_tokens_global.detach().cpu().tolist()
+            correct_list      = (correct_global.detach().cpu().tolist()
+                                  if correct_global is not None else [None] * len(offload_frac_list))
+
+            # ---- (c) simple tag stats derived from COMPLETION TEXT (global) ----
+            import re, numpy as np
+            num_big_calls = [c.count("<bigmodel>") for c in completions_global]
+            balanced_tags = [int(c.count("<bigmodel>") == c.count("</bigmodel>")) for c in completions_global]
+            char_coverage = []
+            for c in completions_global:
+                total = max(1, len(c))
+                segs = re.findall(r"<bigmodel>(.*?)</bigmodel>", c, flags=re.DOTALL)
+                char_coverage.append(sum(len(s) for s in segs) / total)
+
+            # ---- sanity: lengths must all match B_global ----
+            assert len(prompts_global) == len(completions_global) == len(offload_frac_list) == rewards.numel(), \
+                f"mismatch: prompts={len(prompts_global)} comps={len(completions_global)} offload={len(offload_frac_list)} rewards={rewards.numel()}"
+
+            # ---- (d) log W&B table + summary scalars on main process ----
+            if self.accelerator.is_main_process and self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                import pandas as pd
+                table = {
+                    "step":              [str(self.state.global_step)] * rewards.numel(),
+                    "prompt":            prompts_global,
+                    "completion":        completions_global,
+                    "reward":            rewards.detach().cpu().tolist(),
+                    "correct":           correct_list,
+                    "offload_frac_tok":  offload_frac_list,
+                    "big_tokens":        big_tok_list,
+                    "completion_tokens": comp_tok_list,
+                    "num_big_calls":     num_big_calls,
+                    "balanced_tags":     balanced_tags,
+                    "char_coverage":     char_coverage,
+                }
+                df = pd.DataFrame(table)
+                wandb.log({"completions": wandb.Table(dataframe=df)}, commit=False)
+
+                # Quick scalar summaries
+                grp = rewards.view(-1, self.num_generations)
+                # --- std that ignores NaNs (older torch has no torch.nanstd) ---
+                mask = torch.isfinite(grp)                                  # (B_groups, G)
+                count = mask.sum(dim=1).clamp_min(1)                         # (B_groups,)
+                grp_filled = torch.where(mask, grp, torch.zeros_like(grp))   # replace NaNs/Infs with 0 for sums
+                mean = (grp_filled.sum(dim=1) / count).unsqueeze(1)          # (B_groups, 1)
+                var = (((grp_filled - mean) * mask) ** 2).sum(dim=1) / count # (B_groups,)
+                grp_std = var.sqrt()                                         # (B_groups,)
+                # consider groups with <=1 valid item as "all equal" by definition
+                all_equal_group = torch.where(count > 1, (grp_std == 0).float(), torch.ones_like(grp_std))
+
+                all_equal_frac = (grp_std == 0).float().mean().item()
+
+                logs_extra = {
+                    "metrics/offload_frac_mean":     float(offload_frac_global.mean().item()),
+                    "metrics/offload_frac_median":   float(torch.median(offload_frac_global).item()),
+                    "metrics/offload_frac_p95":      float(torch.quantile(offload_frac_global, 0.95).item()),
+                    "metrics/f_any_offload":         float((offload_tokens_global > 0).float().mean().item()),
+                    "metrics/reward_group_std_mean": float(grp_std.mean().item()),
+                    "metrics/all_equal_group_frac":  float(all_equal_group.mean().item()),
+                    "gate/mean_calls":               float(np.mean(num_big_calls) if num_big_calls else 0.0),
+                    "gate/frac_balanced":            float(np.mean(balanced_tags) if balanced_tags else 0.0),
+                }
+                if correct_global is not None:
+                    logs_extra["metrics/accuracy_rate"] = float(correct_global.float().mean().item())
+
+                wandb.log(logs_extra)
+
+
 
         return {
             "prompt_ids": prompt_ids,
@@ -1179,6 +1264,31 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
         }
 
+        # if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
+        #     prompts_to_log = gather_object(prompts_text)
+        #     completions_to_log = gather_object(completions_text)
+        #     rewards_to_log = rewards.tolist()
+
+        #     if self.accelerator.is_main_process:
+        #         if is_rich_available():
+        #             print_prompt_completions_sample(
+        #                 prompts_to_log,
+        #                 completions_to_log,
+        #                 rewards_to_log,
+        #                 self.state.global_step,
+        #             )
+        #         if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+        #             import pandas as pd
+
+        #             # For logging
+        #             table = {
+        #                 "step": [str(self.state.global_step)] * len(rewards),
+        #                 "prompt": prompts_to_log,
+        #                 "completion": completions_to_log,
+        #                 "reward": rewards.tolist(),
+        #             }
+        #             df = pd.DataFrame(table)
+        #             wandb.log({"completions": wandb.Table(dataframe=df)})
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:

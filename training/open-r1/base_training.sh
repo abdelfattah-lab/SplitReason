@@ -24,7 +24,7 @@ python3 ./spec_service.py \
 CUDA_VISIBLE_DEVICES=2,3 ACCELERATE_LOG_LEVEL=info \
     accelerate launch --config_file recipes/accelerate_configs/zero2.yaml --num_processes 2 \
     src/open_r1/grpo.py --config recipes/DeepSeek-R1-Distill-Qwen-1.5B/grpo/config_demo.yaml \
-    --wandb_project SplitReason --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO
+    --wandb_project SplitReason_Nov20 --run_name DeepSeek-R1-Distill-Qwen-1.5B-E2EGRPO
 
 ###### 32B Drafter Model Training Run
 
