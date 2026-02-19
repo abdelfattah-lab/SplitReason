@@ -11,9 +11,8 @@ SMALL_CHUNK      = 64
 STREAM_BUCKET    = 8
 NUM_PROBE_TOKENS = 6
 MAX_TOTAL_TOKENS = 8320 # 4096 + 128 + 4096
-# MAX_TOTAL_TOKENS = 2176 # 4096 + 128
-# MAX_TOTAL_TOKENS = 512
 # MAX_TOTAL_TOKENS = 4224 # 4096 + 128
+# MAX_TOTAL_TOKENS = 2176
 MAX_BIG_SEGMENT  = 128
 BIG_CHUNK_CAP    = 32
 
@@ -100,10 +99,14 @@ async def _run_speculative_async(
         return t
 
     big_hint = "You always use <bigmodel>...</bigmodel> to mark parts of the reasoning process that are important."
-    term_str = "\n Put your final answer within \\boxed{}."
-    cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
-        f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
-    backup_cur = cur
+    # term_str = "\n Put your final answer within \\boxed{}."
+    # cur = (f"<｜begin▁of▁sentence｜><｜User｜>{_clean(question)}\n"
+    #     f"{big_hint}{term_str}<｜Assistant｜>\n<think>\n")
+    # backup_cur = cur
+    cur = question
+    print("=="*30)
+    print(cur)
+    print("=="*30)
 
     usage: List[Dict[str, Any]] = []
     start = time.time()
@@ -127,7 +130,7 @@ async def _run_speculative_async(
                     batched_generate_text_vllm=gen_small,
                     prompts=[cur],
                     port=small_port,
-                    temperature=temperature,
+                    temperature=0.7,
                     max_tokens=max(1, min(SMALL_CHUNK, remain)),
                     model=small_model,
                     is_bigmodel_halting=True,
@@ -176,7 +179,7 @@ async def _run_speculative_async(
                                     for i in range(1, len(bucket)+1)]
                         probe, _ = await _async_call(
                             gen_small, prompts=prefixes, port=small_port,
-                            temperature=temperature, max_tokens=NUM_PROBE_TOKENS,
+                            temperature=0.7, max_tokens=NUM_PROBE_TOKENS,
                             model=small_model, requests=requests,
                         )
                         handoff = None
@@ -224,7 +227,7 @@ async def _run_speculative_async(
         print(f"Error writing to file: {e}")
         print("Please check if the file path is correct and if you have write permissions.")
         pass
-    cur = cur.replace(backup_cur, "") # remove input prompt to simplify \boxed{} processing
+    # cur = cur.replace(backup_cur, "") # remove input prompt to simplify \boxed{} processing
     return cur, usage
 
 def run_speculative_reasoning_flow_perf(

@@ -28,6 +28,71 @@ from math_verify import LatexExtractionConfig, parse, verify
 
 from .utils import is_e2b_available
 from .utils.ioi import SubtaskResult, add_includes, get_piston_client_from_env, score_subtask
+import re
+from typing import Optional, List
+
+from latex2sympy2_extended import NormalizationConfig
+from math_verify import LatexExtractionConfig, parse, verify
+
+
+# ---------------- helpers ----------------
+_ANSWER_BLOCK_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", flags=re.DOTALL)
+
+def _extract_answer_block(text: str) -> str:
+    """Return content inside <answer>...</answer> if present, else full text."""
+    m = _ANSWER_BLOCK_RE.search(text)
+    return m.group(1) if m else text
+
+def _extract_boxed_content(text: str) -> Optional[str]:
+    # Return the LAST balanced \boxed{...} (models often output multiple boxes)
+    key = r"\boxed{"
+    start = text.rfind(key)
+    while start != -1:
+        i = start + len(key)
+        depth = 1
+        out = []
+        while i < len(text):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return "".join(out)
+            out.append(ch)
+            i += 1
+        # unbalanced at this occurrence; try an earlier one
+        start = text.rfind(key, 0, start)
+    return None
+
+def _sanitize_latex(s: str) -> str:
+    """
+    Fix common dataset latex issues:
+      - \pin -> \pi n, \pik -> \pi k (missing space after \pi)
+      - \inZ, \inN, ... -> \in \mathbb{Z}, ...
+    Keep it minimal so we don't break valid latex.
+    """
+    s = s.strip()
+
+    # \pin -> \pi n, \pik -> \pi k, etc.
+    s = re.sub(r"\\pi(?=[A-Za-z])", r"\\pi ", s)
+
+    # \inZ -> \in \mathbb{Z} (only for common number sets to avoid breaking \int, \infty, etc.)
+    s = re.sub(r"\\in([ZNRQC])", r"\\in \\mathbb{\1}", s)
+
+    # Also fix \mathbbZ -> \mathbb{Z} if it ever appears
+    s = re.sub(r"\\mathbb([ZNRQC])", r"\\mathbb{\1}", s)
+
+    return s
+
+def _norm_for_string_match(s: str) -> str:
+    s = _sanitize_latex(s)
+    s = s.replace(r"\left", "").replace(r"\right", "")
+    s = re.sub(r"\s+", "", s)
+    # drop surrounding $...$ if present
+    if len(s) >= 2 and s[0] == "$" and s[-1] == "$":
+        s = s[1:-1]
+    return s
 
 
 if is_e2b_available():
@@ -63,9 +128,110 @@ def _has_proper_bigmodel_nesting(text: str) -> bool:
         pos = close_pos + len(close_tag)  # continue scanning after this pair
 
 
+# ---------------- fixed reward ----------------
+# def accuracy_reward(
+#     completions: list[list[dict[str, str]]],
+#     solution: list[str],
+#     **kwargs
+# ) -> list[Optional[float]]:
+#     """
+#     Uses dataset 'answer' if available. Robust gold parsing + boxed extraction.
+#     Returns 1.0/0.0, and only returns None if *both* verification and fallback are impossible.
+#     """
+#     contents = [completion[0]["content"].replace("Put your final answer within \\boxed{}", "") for completion in completions]
+
+#     # Prefer explicit 'answer' column if present; fall back to 'solution'
+#     gold_list = kwargs.get("answer", None)
+#     if gold_list is None:
+#         gold_list = solution
+
+#     # Gold parsing needs to accept bare answers + tolerate malformed operators
+#     gold_cfg = [
+#         LatexExtractionConfig(
+#             normalization_config=NormalizationConfig(
+#                 nits=False,
+#                 malformed_operators=True,   # <-- key change for dataset artifacts like \pin, \inZ, etc.
+#                 basic_latex=True,
+#                 equations=False,
+#                 boxed="all",
+#                 units=True,
+#             ),
+#             boxed_match_priority=0,
+#             try_extract_without_anchor=False,  # <-- key change for bare strings like "p_1+p_2>2q"
+#         )
+#     ]
+
+#     # Answer parsing: we parse only the final answer region, so we can also allow unanchored.
+#     ans_cfg = [
+#         LatexExtractionConfig(
+#             normalization_config=NormalizationConfig(
+#                 nits=False,
+#                 malformed_operators=True,   # you can set False if you want to be strict on model formatting
+#                 basic_latex=True,
+#                 equations=False,
+#                 boxed="all",
+#                 units=True,
+#             ),
+#             boxed_match_priority=0,
+#             try_extract_without_anchor=False,
+#         )
+#     ]
+
+#     rewards: List[Optional[float]] = []
+#     # --- DEBUG: set to True to print parsing/verification details ---
+#     DEBUG_PARSE = True
+
+#     for content, gold in zip(contents, gold_list):
+#         # 1) isolate model's final answer (prefer boxed)
+#         answer_region = _extract_answer_block(content)
+#         boxed = _extract_boxed_content(answer_region)
+#         import pdb; pdb.set_trace()
+#         candidate = boxed if boxed is not None else answer_region
+
+#         # sanitize both
+#         gold_s = _sanitize_latex(gold)
+#         cand_s = _sanitize_latex(candidate)
+#         # force gold into a latex env so LatexExtractionConfig extracts the WHOLE thing
+#         gold_parse_text = f"\\boxed{{{gold_s}}}"
+#         # keep model text with env for parsing (don't pass the stripped inner)
+#         # cand_parse_text = f"\\boxed{{{cand_s}}}"
+#         cand_parse_text = cand_s
+#         if DEBUG_PARSE:
+#             print(f"gold={gold_s!r}\tcand={cand_s[:200]!r}")
+#         # 2) parse
+#         gold_parsed = parse(gold_parse_text, extraction_config=gold_cfg, extraction_mode="first_match")
+#         import pdb; pdb.set_trace()
+#         ans_parsed  = parse(cand_parse_text, extraction_config=ans_cfg,  extraction_mode="first_match")
+ 
+#         if DEBUG_PARSE:
+#             print(f"gold_parsed={gold_parsed}\tans_parsed={ans_parsed}")
+#         # 3) verify if possible, else fallback
+#         if len(gold_parsed) and len(ans_parsed):
+#             try:
+#                 reward = float(verify(gold_parsed, ans_parsed))
+#                 if DEBUG_PARSE: print(f"verify={reward}")
+#                 rewards.append(reward)
+#                 continue
+#             except Exception:
+#                 if DEBUG_PARSE: print("verify=EXC")
+#                 # fall through to string match
+#                 pass
+#         import pdb; pdb.set_trace()
+
+#         norm_gold = _norm_for_string_match(gold_s); norm_cand = _norm_for_string_match(cand_s)
+#         reward = 1.0 if norm_cand == norm_gold else 0.0
+#         if DEBUG_PARSE: print(f"fallback={reward} ng={norm_gold!r} nc={norm_cand!r}")
+#         rewards.append(reward)
+#         # # fallback: normalized string match (keeps training from skipping many examples)
+#         # reward = 1.0 if _norm_for_string_match(cand_s) == _norm_for_string_match(gold_s) else 0.0
+#         # rewards.append(reward)
+
+#     return rewards
+
+
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
     """Reward function that checks if the completion is the same as the ground truth."""
-    contents = [completion[0]["content"] for completion in completions]
+    contents = [completion[0]["content"].replace("Put your final answer within \\boxed{}", "") for completion in completions]
     rewards = []
     for content, sol in zip(contents, solution):
         gold_parsed = parse(
@@ -96,6 +262,8 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
             # Compute binary rewards if verifiable, `None` otherwise to skip this example
             try:
                 reward = float(verify(gold_parsed, answer_parsed))
+                print(f"Gold: {gold_parsed}, answer: {answer_parsed}")
+                print(f"Reward: {reward}")
             except Exception as e:
                 print(f"verify failed: {e}, answer: {answer_parsed}, gold: {gold_parsed}")
                 reward = None
@@ -106,6 +274,64 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
         rewards.append(reward)
 
     return rewards
+
+
+# gold_parsed = parse(gold,     extraction_config=extraction_cfg,     extraction_mode="first_match", )
+# extraction_cfg = [LatexExtractionConfig(normalization_config=NormalizationConfig(nits=False, malformed_operators=False, basic_latex=True, equations=True, boxed="all", units=True), boxed_match_priority=0, try_extract_without_anchor=False)]
+
+
+# def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
+#     """Reward function that checks if the completion is the same as the ground truth."""
+#     contents = [completion[0]["content"] for completion in completions]
+#     rewards = []
+#     # Prefer explicit 'answer' column if present; fall back to 'solution'
+#     gold_list = kwargs.get("answer", None)
+#     if gold_list is None:
+#         gold_list = solution
+
+#     # One shared extraction config for BOTH gold and answer parsing
+#     extraction_cfg = [
+#         LatexExtractionConfig(
+#             normalization_config=NormalizationConfig(
+#                 nits=False,
+#                 malformed_operators=False,
+#                 basic_latex=True,
+#                 equations=True,
+#                 boxed="all",
+#                 units=True,
+#             ),
+#             boxed_match_priority=0,
+#             try_extract_without_anchor=False,
+#         )
+#     ]
+#     for content, gold in zip(contents, gold_list):
+#         gold_parsed = parse(
+#             gold,
+#             extraction_config=extraction_cfg,
+#             extraction_mode="first_match",
+#         )
+#         if len(gold_parsed) != 0:
+#             # We require the answer to be provided in correct latex (no malformed operators)
+#             answer_parsed = parse(
+#                 content.replace("Put your final answer within \\boxed{}", ""),
+#                 extraction_config=extraction_cfg,
+#                 extraction_mode="first_match",
+#             )
+
+#             # Compute binary rewards if verifiable, `None` otherwise to skip this example
+#             try:
+#                 reward = float(verify(gold_parsed, answer_parsed))
+#                 print(f"Verifying {gold_parsed} \t with answer: {answer_parsed}\nReward is : {reward}")
+#             except Exception as e:
+#                 print(f"verify failed: {e}, \t answer: {answer_parsed}, gold: {gold_parsed}")
+#                 reward = None
+#         else:
+#             # If the gold solution is not parseable, we assign `None` to skip this example
+#             reward = None
+#             print("Failed to parse gold: ", gold)
+#         rewards.append(reward)
+
+#     return rewards
 
 
 # def format_reward(completions, **kwargs):
@@ -150,7 +376,7 @@ def coverage_reward(content: str) -> float:
     - 0 <= ratio < 0.15: linearly 0 to +1
     - 0.15 <= ratio <= 1.0: linearly from +1 down to -1
     """
-    increase_till = 0.2
+    increase_till = 0.15
     try:
         total_chars = len(content)
         if total_chars == 0:
@@ -220,7 +446,7 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
         close_count = text.count("</bigmodel>")
 
         # Max tag reward is 2
-        r += (bigmodel_count_reward(open_count)//2)
+        r += (bigmodel_count_reward(open_count)/2.)
         
         # Max coverage reward is 2
         coverage_r = 2*coverage_reward(text)
@@ -280,7 +506,6 @@ def len_reward(completions: list[Dict[str, str]], solution: list[str], **kwargs)
             correctness.append(True)  # Treat as correct to avoid penalizing
             print("Failed to parse gold solution: ", sol)
             continue
-
         answer_parsed = parse(
             content,
             extraction_config=[

@@ -4,12 +4,15 @@ import torch
 from transformers import PreTrainedTokenizerBase
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import threading
 import numpy as np         #  add import at top
 from tqdm import tqdm
 from typing import Optional, List
 import typing
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+from requests.adapters import HTTPAdapter
+
 
 class WeightSyncClient:
     """
@@ -32,6 +35,10 @@ class WeightSyncClient:
         self.base_url = spec_endpoint.rstrip("/")
         self.timeout  = timeout
 
+        # one Session per worker thread (created lazily)
+        self._tls = threading.local()
+
+
     def update_named_param(self, name: str, tensor: torch.Tensor) -> None:
         t_cpu = tensor.detach().cpu().contiguous()
 
@@ -50,7 +57,40 @@ class WeightSyncClient:
 
         requests.post(f"{self.base_url}/update_param",
                     data=data, files=files, timeout=self.timeout).raise_for_status()
-        # ------------------------------------------------------------
+
+    def _get_thread_session(self) -> requests.Session:
+        """
+        Create/reuse a requests.Session for the current thread.
+        This lets HTTP keep-alive actually reuse connections under ThreadPoolExecutor.
+        """
+        sess = getattr(self._tls, "sess", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.headers.update({"Connection": "keep-alive"})
+
+            # Keep the pool small: each thread really only needs ~1 live connection.
+            # (If you later do multiple hosts, you can increase pool_connections.)
+            adapter = HTTPAdapter(
+                pool_connections=1,
+                pool_maxsize=1,
+                max_retries=0,
+                pool_block=True,
+            )
+            sess.mount("http://", adapter)
+            sess.mount("https://", adapter)
+
+            self._tls.sess = sess
+        return sess
+
+    def _close_thread_session(self) -> None:
+        """Best-effort close of the current thread's session."""
+        sess = getattr(self._tls, "sess", None)
+        if sess is not None:
+            try:
+                sess.close()
+            finally:
+                self._tls.sess = None
+    # ------------------------------------------------------------
     # 2) Flush KV‑cache on the server (call after *all* params done)
     # ------------------------------------------------------------
     def reset_prefix_cache(self) -> None:
@@ -70,7 +110,7 @@ class WeightSyncClient:
         max_tokens: int,
         guided_decoding_regex: typing.Optional[str] = None,
         *,
-        server_parallelism: int = 4,   # set to the number of requests your server can run concurrently
+        server_parallelism: int = 20,   # set to the number of requests your server can run concurrently
     ) -> list[list[int]]:
         """
         Return a flat list of token-ID sequences in the order
@@ -84,20 +124,36 @@ class WeightSyncClient:
 
         def _one_call(prompt: str, slot: int) -> None:
             """Send one HTTP request and fill completions[slot]."""
-            with requests.Session() as sess:          # session per thread
-                print(f"Posting item {slot} out of {total_reqs}", flush=True)
-                start_time = time.time()
-                sess.headers.update({"Connection": "keep-alive"})
-                payload = {**payload_template, "question": prompt}
-                r = sess.post(f"{self.base_url}/speculative_reason",
-                              json=payload, timeout=self.timeout)
-                r.raise_for_status()
-                text = r.json()["final_answer"]
-                completions[slot] = self.tok.encode(text, add_special_tokens=False)
-                elapsed = time.time() - start_time
-                print(f"Processing item {slot} out of {total_reqs} "
-                      f"took {elapsed:.2f} seconds", flush=True)
-                print(f"[rank-0] finished slot {slot}/{total_reqs-1}", flush=True)
+            sess = self._get_thread_session()
+            print(f"Posting item {slot} out of {total_reqs}", flush=True)
+            start_time = time.time()
+            payload = {**payload_template, "question": prompt}
+            r = sess.post(
+                f"{self.base_url}/speculative_reason",
+                json=payload,
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+            text = r.json()["final_answer"]
+            completions[slot] = self.tok.encode(text, add_special_tokens=False)
+            elapsed = time.time() - start_time
+            print(f"Processing item {slot} out of {total_reqs} "
+                  f"took {elapsed:.2f} seconds", flush=True)
+            print(f"[rank-0] finished slot {slot}/{total_reqs-1}", flush=True)
+            # with requests.Session() as sess:          # session per thread
+            #     print(f"Posting item {slot} out of {total_reqs}", flush=True)
+            #     start_time = time.time()
+            #     sess.headers.update({"Connection": "keep-alive"})
+            #     payload = {**payload_template, "question": prompt}
+            #     r = sess.post(f"{self.base_url}/speculative_reason",
+            #                   json=payload, timeout=self.timeout)
+            #     r.raise_for_status()
+            #     text = r.json()["final_answer"]
+            #     completions[slot] = self.tok.encode(text, add_special_tokens=False)
+            #     elapsed = time.time() - start_time
+            #     print(f"Processing item {slot} out of {total_reqs} "
+            #           f"took {elapsed:.2f} seconds", flush=True)
+            #     print(f"[rank-0] finished slot {slot}/{total_reqs-1}", flush=True)
 
         workers = min(server_parallelism, total_reqs)  # never oversubscribe
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -109,6 +165,11 @@ class WeightSyncClient:
 
             for fut in as_completed(futures):
                 fut.result()  # will raise immediately on first error
+
+        # Best-effort: close any session created in the main thread.
+        # (Worker thread sessions die with threads; Python doesn't guarantee cleanup,
+        # but this prevents holding a session open if generate() is called from many places.)
+        self._close_thread_session()
 
         return completions
     # def generate(

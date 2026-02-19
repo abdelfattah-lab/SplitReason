@@ -20,7 +20,7 @@ system_prompt: "You are a helpful AI Assistant that provides well-reasoned and d
 bf16: true
 use_vllm: true
 do_eval: false
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 4
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
@@ -37,13 +37,13 @@ lr_scheduler_kwargs:
   min_lr_rate: 0.1
 max_prompt_length: 512
 max_completion_length: 8192
-max_steps: 500
-num_generations: 8
+max_steps: 400
+num_generations: 10
 num_train_epochs: 1
 output_dir: data/DDR1_Q1.5B-GRPOFixReward
 overwrite_output_dir: true
-per_device_eval_batch_size: 4
-per_device_train_batch_size: 4
+per_device_eval_batch_size: 10
+per_device_train_batch_size: 10
 push_to_hub: true
 report_to:
 - wandb
@@ -61,4 +61,4 @@ save_total_limit: 1
 seed: 42
 temperature: 0.7
 use_liger_kernel: false
-warmup_ratio: 0.1
+warmup_ratio: 0.02

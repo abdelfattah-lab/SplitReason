@@ -6,6 +6,8 @@ import signal
 import sys
 import requests
 import threading
+import queue
+from concurrent.futures import Future
 
 # from flask import Flask, request, jsonify
 import base64, numpy as np, torch
@@ -42,6 +44,129 @@ project_root = Path(__file__).resolve().parent
 env["PYTHONPATH"] = f"{project_root}:{env.get('PYTHONPATH', '')}"
 SMALL_LLM_LOCK = threading.Lock()
 
+
+SMALL_BATCHER = None  # will be created after SMALL_LLM init
+
+
+class SmallModelBatcher:
+    """
+    Micro-batch SMALL_LLM.generate() calls across concurrent Flask requests.
+
+    - All SMALL_LLM.generate() calls happen on ONE dedicated thread.
+    - Requests submit jobs and block on a Future.
+    - The batcher coalesces jobs for a few ms and runs a single batched generate().
+    """
+
+    def __init__(
+        self,
+        llm: "LLM",
+        exec_lock: threading.Lock,
+        max_batch_prompts: int = 64,
+        max_wait_ms: int = 2,
+        debug: bool = False,
+    ):
+        self.llm = llm
+        self.exec_lock = exec_lock
+        self.max_batch_prompts = max_batch_prompts
+        self.max_wait_s = max_wait_ms / 1000.0
+        self.debug = debug
+
+        # Each item: (prompts: List[str], params: SamplingParams, fut: Future)
+        self.q: "queue.Queue" = queue.Queue()
+        self._stop = threading.Event()
+        self._thr = threading.Thread(target=self._loop, daemon=True)
+        self._thr.start()
+
+    def _params_key(self, p: "SamplingParams"):
+        # We MUST only batch together requests that are identical in SamplingParams,
+        # otherwise you change the distribution.
+        stop = tuple(getattr(p, "stop", None) or ())
+        stop_token_ids = tuple(getattr(p, "stop_token_ids", None) or ())
+        return (
+            getattr(p, "temperature", None),
+            getattr(p, "top_p", None),
+            getattr(p, "top_k", None),
+            getattr(p, "min_p", None),
+            getattr(p, "repetition_penalty", None),
+            getattr(p, "presence_penalty", None),
+            getattr(p, "frequency_penalty", None),
+            getattr(p, "max_tokens", None),
+            getattr(p, "n", None),
+            getattr(p, "logprobs", None),
+            getattr(p, "prompt_logprobs", None),
+            stop,
+            stop_token_ids,
+            getattr(p, "include_stop_str_in_output", None),
+            getattr(p, "ignore_eos", None),
+        )
+
+    def submit(self, prompts: list[str], params: "SamplingParams") -> Future:
+        fut: Future = Future()
+        self.q.put((prompts, params, fut))
+        return fut
+
+    def generate(self, prompts: list[str], params: "SamplingParams"):
+        # Blocking helper for callers that want sync semantics
+        return self.submit(prompts, params).result()
+
+    def _loop(self):
+        while not self._stop.is_set():
+            prompts0, params0, fut0 = self.q.get()
+            if prompts0 is None:
+                continue
+
+            batch = [(prompts0, params0, fut0)]
+            total_prompts = len(prompts0)
+            deadline = time.time() + self.max_wait_s
+
+            # Gather a micro-batch
+            while total_prompts < self.max_batch_prompts and time.time() < deadline:
+                try:
+                    prompts, params, fut = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                if prompts is None:
+                    continue
+                batch.append((prompts, params, fut))
+                total_prompts += len(prompts)
+
+            # Group by SamplingParams (must match exactly)
+            groups = {}
+            for prompts, params, fut in batch:
+                key = self._params_key(params)
+                if key not in groups:
+                    groups[key] = {"params": params, "items": []}
+                groups[key]["items"].append((prompts, fut))
+
+            # Execute each group as one batched vLLM call
+            for g in groups.values():
+                params = g["params"]
+                items = g["items"]
+
+                flat_prompts = []
+                slices = []  # (future, start, end)
+                for prompts, fut in items:
+                    s = len(flat_prompts)
+                    flat_prompts.extend(prompts)
+                    e = len(flat_prompts)
+                    slices.append((fut, s, e))
+
+                if self.debug and len(flat_prompts) > 1:
+                    print(f"[SmallBatcher] microbatch size={len(flat_prompts)} "
+                          f"num_jobs={len(items)} max_tokens={getattr(params,'max_tokens',None)}",
+                          flush=True)
+
+                try:
+                    # One exclusive generate call for this group
+                    with self.exec_lock:
+                        outs = self.llm.generate(flat_prompts, params)
+
+                    # Return per-job slices
+                    for fut, s, e in slices:
+                        fut.set_result(outs[s:e])
+                except Exception as e:
+                    for fut, _, _ in slices:
+                        fut.set_exception(e)
 
 app = Flask(__name__)
 SMALL_LLM          = None   # vllm.LLM object (small model)
@@ -126,7 +251,7 @@ def approximate_token_count(text: str) -> int:
     tokens = big_model_tokenizer.encode(text, add_special_tokens=False)
     return len(tokens)
 
-def _start_vllm(model_name: str, port: int, gpu_ids: str, is_small: bool) -> subprocess.Popen:
+def _start_vllm(model_name: str, port: int, gpu_ids: str, is_small: bool, max_model_len: int) -> subprocess.Popen:
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_ids
@@ -146,7 +271,7 @@ def _start_vllm(model_name: str, port: int, gpu_ids: str, is_small: bool) -> sub
         "--port", str(port),
         "--trust-remote-code",
         "--tensor-parallel-size", str(tp_size),
-        "--max-model-len", "16384",
+        "--max-model-len", str(max_model_len),
         "--uvicorn-log-level=warning",
         "--enable-prefix-caching",
         "--enable-chunked-prefill"
@@ -159,9 +284,10 @@ def _start_vllm(model_name: str, port: int, gpu_ids: str, is_small: bool) -> sub
     # item_small = ["--worker-extension-cls", "vllm.examples.offline_inference.rlhf_utils.WorkerExtension",]
 
 def _launch_blocking(model_name: str, port: int, gpu_ids: str,
-                     timeout: float = 600.0, poll: float = 5.0, is_small=False) -> subprocess.Popen:
+                     timeout: float = 600.0, poll: float = 5.0, is_small=False,
+                     max_model_len: int = 16384) -> subprocess.Popen:    
     """Start vLLM and block until it answers a ping or timeout expires."""
-    proc = _start_vllm(model_name, port, gpu_ids, is_small=is_small)
+    proc = _start_vllm(model_name, port, gpu_ids, is_small=is_small, max_model_len=max_model_len)
     print(f"[Service] Launching {model_name} on :{port} (GPUs={gpu_ids}) …")
 
     elapsed = 0.0
@@ -180,11 +306,11 @@ def _launch_blocking(model_name: str, port: int, gpu_ids: str,
 
 
 def launch_big_model_vllm(big_model, port, gpu_ids):
-    return _launch_blocking(big_model, port, gpu_ids)
+    return _launch_blocking(big_model, port, gpu_ids, max_model_len=service_args.max_model_len)
 
 
 def launch_small_model(model_name, port, gpu_ids):
-    return _launch_blocking(model_name, port, gpu_ids, is_small=True)
+    return _launch_blocking(model_name, port, gpu_ids, is_small=True, max_model_len=service_args.max_model_len)
 
 def launch_spec_decoding_server(
     big_model: str,
@@ -346,7 +472,7 @@ def _to_openai_single(out, want_tokens=False):
 # ------------------------------------------------------------
 def generate_text_vllm(prompt,
                        port          = 8000,
-                       temperature   = 0.6,
+                       temperature   = 0.7,
                        max_tokens    = 128,
                        model         = "my-model",
                        is_bigmodel_halting=False,
@@ -365,8 +491,14 @@ def generate_text_vllm(prompt,
             include_stop_str_in_output = True,
         )
         t0 = time.time()
-        with SMALL_LLM_LOCK:
-            out = SMALL_LLM.generate([prompt], params)[0].outputs[0]
+        # micro-batched path
+        if SMALL_BATCHER is None:
+            # fallback (shouldn't happen)
+            with SMALL_LLM_LOCK:
+                out = SMALL_LLM.generate([prompt], params)[0].outputs[0]
+        else:
+            outs = SMALL_BATCHER.generate([prompt], params)
+            out = outs[0].outputs[0]
         latency = time.time() - t0
         return _to_openai_single(out), latency
 
@@ -409,7 +541,7 @@ def generate_text_vllm(prompt,
 # ------------------------------------------------------------
 def batched_generate_text_vllm(prompts: List[str],
                                port: int              = 8000,
-                               temperature: float     = 0.6,
+                               temperature: float     = 0.7,
                                max_tokens: int        = 128,
                                model: str             = "my-model",
                                is_bigmodel_halting    = False,
@@ -426,8 +558,11 @@ def batched_generate_text_vllm(prompts: List[str],
             include_stop_str_in_output = True,
         )
         t0   = time.time()
-        with SMALL_LLM_LOCK:
-            outs = SMALL_LLM.generate(prompts, params)
+        if SMALL_BATCHER is None:
+            with SMALL_LLM_LOCK:
+                outs = SMALL_LLM.generate(prompts, params)
+        else:
+            outs = SMALL_BATCHER.generate(prompts, params)
         latency = (time.time() - t0) / max(1, len(prompts))
         results = [_to_openai_single(o.outputs[0]) for o in outs]
         return results, latency
@@ -466,7 +601,7 @@ def batched_generate_text_vllm(prompts: List[str],
 # ------------------------------------------------------------
 def batched_generate_text_with_tokens_vllm(prompts: List[str],
                                            port: int              = 8000,
-                                           temperature: float     = 0.6,
+                                           temperature: float     = 0.7,
                                            max_tokens: int        = 128,
                                            model: str             = "my-model",
                                            requests               = None,
@@ -486,8 +621,11 @@ def batched_generate_text_with_tokens_vllm(prompts: List[str],
             include_stop_str_in_output = True,
         )
         t0   = time.time()
-        with SMALL_LLM_LOCK:
-            outs = SMALL_LLM.generate(prompts, params)
+        if SMALL_BATCHER is None:
+            with SMALL_LLM_LOCK:
+                outs = SMALL_LLM.generate(prompts, params)
+        else:
+            outs = SMALL_BATCHER.generate(prompts, params)
         latency = (time.time() - t0) / max(1, len(prompts))
 
         results     = []
@@ -590,7 +728,7 @@ def speculative_reason():
     drafting_n = data.get("drafting_n", service_args.drafting_n)
     full_rewrite = data.get("full_rewrite", service_args.full_rewrite)
     max_tokens = data.get("max_tokens", service_args.max_tokens)
-    temperature = data.get("temperature", 0.6)
+    temperature = data.get("temperature", 0.7)
     terminating_string = data.get("terminating_string", service_args.terminating_string)
     draft_propose_ignore_str = data.get("draft_propose_ignore_str", service_args.draft_propose_ignore_str)
     small_first = data.get("small_first", service_args.small_first)
@@ -839,20 +977,38 @@ def update_param():
             prefix, qkv, kind = m.groups()           # e.g. ("model.layers.0.self_attn.", "q", "weight")
             fused_name = f"{prefix}qkv_proj.{kind}"  # vLLM parameter
             fused_param = dict(model.named_parameters())[fused_name]
-
-            hidden_size   = model.config.hidden_size        # 1536
-            head_dim      = hidden_size // model.config.num_attention_heads  # 128
-            kv_heads      = model.config.num_key_value_heads # 2
-            kv_out        = kv_heads * head_dim              # 256
-            q_slice, k_slice, v_slice = \
-                slice(0, hidden_size), \
-                slice(hidden_size, hidden_size + kv_out), \
-                slice(hidden_size + kv_out, hidden_size + 2*kv_out)
+            num_heads = model.config.num_attention_heads
+            kv_heads = model.config.num_key_value_heads
+            fused_rows = fused_param.shape[0]
+            group_factor = num_heads + 2 * kv_heads
+            head_dim = fused_rows // group_factor
+            if head_dim * group_factor != fused_rows:
+                raise ValueError(
+                    f"Unexpected fused qkv rows={fused_rows} for "
+                    f"num_heads={num_heads}, kv_heads={kv_heads}"
+                )
+            q_len = num_heads * head_dim
+            kv_len = kv_heads * head_dim
+            q_slice, k_slice, v_slice = (
+                slice(0, q_len),
+                slice(q_len, q_len + kv_len),
+                slice(q_len + kv_len, q_len + 2 * kv_len),
+            )
             which = {"q": q_slice, "k": k_slice, "v": v_slice}[qkv]
 
             # copy into slice (dim-0 for weights / same for bias)
+            # with torch.no_grad():
+            #     fused_param.data[which, ...].copy_(t)
             with torch.no_grad():
-                fused_param.data[which, ...].copy_(t)
+                target_view = fused_param.data[which, ...]
+                rows = min(target_view.size(0), t.size(0))
+                target_view[:rows].copy_(t[:rows])
+            if rows != target_view.size(0):
+                print(
+                    f"   ↳ qkv slice mismatch for {p_name}: "
+                    f"target {target_view.shape}, incoming {t.shape}; "
+                    f"copied first {rows} rows"
+                )
             return 0   # done, skip the usual path below
 
         # ---------- gate / up mapping ----------
@@ -894,8 +1050,13 @@ def update_param():
             )
         return 0
 
-    SMALL_LLM.collective_rpc(_swap, args=(name, dtype, shape, blob))
-    SMALL_LLM.reset_prefix_cache()
+    # SMALL_LLM.collective_rpc(_swap, args=(name, dtype, shape, blob))
+    # SMALL_LLM.reset_prefix_cache()
+
+    # Prevent generate() running concurrently with weight updates
+    with SMALL_LLM_LOCK:
+        SMALL_LLM.collective_rpc(_swap, args=(name, dtype, shape, blob))
+        SMALL_LLM.reset_prefix_cache()
     return jsonify(status="ok"), 200
 
 
@@ -907,7 +1068,9 @@ def reset_cache():
     if SMALL_LLM is None:
         return jsonify(error="small model not initialised"), 503
 
-    SMALL_LLM.reset_prefix_cache()
+    # Prevent generate() running concurrently with cache reset
+    with SMALL_LLM_LOCK:
+        SMALL_LLM.reset_prefix_cache()
     return jsonify(status="ok"), 200
 
     
@@ -980,7 +1143,7 @@ def init_small_model_inproc(model_name: str, gpu_ids: str, max_len: int):
     Launch the small vLLM model *inside* this process so that we can
     hot‑swap weights via Python, no HTTP.
     """
-    global SMALL_LLM, SMALL_MODEL_RUNNER
+    global SMALL_LLM, SMALL_MODEL_RUNNER, SMALL_BATCHER
 
     if SMALL_LLM is not None:   # already initialised
         return
@@ -995,6 +1158,12 @@ def init_small_model_inproc(model_name: str, gpu_ids: str, max_len: int):
         max_model_len         = max_len,
         enable_prefix_caching = True,
     )
+    # Start the micro-batching broker (once)
+    if SMALL_BATCHER is None:
+        SMALL_BATCHER = SmallModelBatcher(
+            llm=SMALL_LLM, exec_lock=SMALL_LLM_LOCK, max_batch_prompts=64, max_wait_ms=2, debug=True
+        )
+
     # from types import MethodType
     # # one dummy generate to force worker construction
     # _ = SMALL_LLM.generate(["ping"], SamplingParams(max_tokens=1, temperature=0.0))
@@ -1078,7 +1247,7 @@ def main():
         init_small_model_inproc(
             model_name  = service_args.small_model,
             gpu_ids     = service_args.small_model_gpus,
-            max_len     = 16384,
+            max_len     = service_args.max_model_len,
         )
         print("[Service] Small model initialised *inside* Flask process ✅")
     # if need_small_model:
@@ -1102,7 +1271,8 @@ def main():
     ready_event.set()
     # 3) Start our Flask app
     try:
-        app.run(host="0.0.0.0", port=service_args.port)
+        # app.run(host="0.0.0.0", port=service_args.port)
+        app.run(host="0.0.0.0", port=service_args.port, threaded=True)
     except KeyboardInterrupt:
         pass
     finally:

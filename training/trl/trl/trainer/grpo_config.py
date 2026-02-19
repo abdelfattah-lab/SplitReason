@@ -136,7 +136,7 @@ class GRPOConfig(TrainingArguments):
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
     """
     spec_service_url: str = "http://localhost:5002"
-    spec_service_timeout: float = 600.0
+    spec_service_timeout: float = 1200.0
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[dict] = field(

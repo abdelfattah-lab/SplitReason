@@ -89,9 +89,11 @@ def main() -> None:
     #     "Repeat8_SPECR14B": "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_14B_10Aug/meta-llama__Llama-2-7b-chat-hf",
     #     "Repeat8_SPECR32B": "/home/ya255/projects/SpeculativeReasoning/log_traces/SPECR_32B_10Aug/meta-llama__Llama-2-7b-chat-hf",
     # }
-    base_path = "/mnt/home/ya255/projects/SplitReason/log_traces/"
+    base_path = "/mnt/weka/home/yash.akhauri/projects/SplitReason/log_traces/"
     json_folder_dict = {
-        "E2EGRPO": "/mnt/home/ya255/projects/SplitReason/log_traces/NewModel_e2egrpo_8b_v2/meta-llama__Llama-2-7b-chat-hf"
+        "E2EGRPO": '/mnt/weka/home/yash.akhauri/projects/SplitReason/log_traces/Jan22_e2eGRPOv2/meta-llama__Llama-2-7b-chat-hf',
+        # "E2EGRPO": "/mnt/home/ya255/projects/SplitReason/log_traces/NewModel_e2egrpo_8b_v2/meta-llama__Llama-2-7b-chat-hf"
+        # "E2EGRPO": "/mnt/weka/home/yash.akhauri/projects/SplitReason/log_traces/Jan22_e2eGRPO/meta-llama__Llama-2-7b-chat-hf"
         # # vllm-spec service for accuracy measurement with 1.5B model
         # "vlspec_ONLY_15B": "/home/ya255/projects/SpeculativeReasoning/log_traces/vlspec_ONLY_15B/meta-llama__Llama-2-7b-chat-hf",
         # # vllm-spec service with no-prefix-caching for accuracy measurement with 1.5B model
