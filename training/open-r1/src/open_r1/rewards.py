@@ -881,6 +881,57 @@ async def run_script(script: str, language: str, semaphore: asyncio.Semaphore) -
                 print(f"Error from E2B executor kill with sandbox ID {sandbox.sandbox_id} : {e}")
 
 
+def _triangle(value: float, peak: float) -> float:
+    """Triangle reward: 0 at 0, 1.0 at `peak`, back to 0 at 2*peak, floored at 0."""
+    if value <= 0 or value >= 2 * peak:
+        return 0.0
+    if value <= peak:
+        return value / peak
+    return (2 * peak - value) / peak
+
+
+def offload_count_reward(completions, **kwargs) -> list[float]:
+    """Triangle-shaped reward peaking at 4 offload segments."""
+    rewards = []
+    for completion in completions:
+        text = completion[0]["content"]
+        n = text.count("<bigmodel>")
+        rewards.append(_triangle(n, peak=4))
+    return rewards
+
+
+def offload_length_reward(completions, **kwargs) -> list[float]:
+    """Triangle-shaped reward peaking at 16 tokens average per offload segment."""
+    rewards = []
+    for completion in completions:
+        text = completion[0]["content"]
+        segments = re.findall(r"<bigmodel>(.*?)</bigmodel>", text, re.DOTALL)
+        if not segments:
+            rewards.append(0.0)
+            continue
+        avg_tokens = sum(len(seg.split()) for seg in segments) / len(segments)
+        rewards.append(_triangle(avg_tokens, peak=16))
+    return rewards
+
+
+def raw_offload_count(completions, **kwargs) -> list[float]:
+    """Raw number of <bigmodel> tags (for logging only, use weight 0.0)."""
+    return [float(c[0]["content"].count("<bigmodel>")) for c in completions]
+
+
+def raw_offload_avg_len(completions, **kwargs) -> list[float]:
+    """Raw average whitespace-token length per offload segment (for logging only, use weight 0.0)."""
+    rewards = []
+    for completion in completions:
+        text = completion[0]["content"]
+        segments = re.findall(r"<bigmodel>(.*?)</bigmodel>", text, re.DOTALL)
+        if not segments:
+            rewards.append(0.0)
+        else:
+            rewards.append(sum(len(seg.split()) for seg in segments) / len(segments))
+    return rewards
+
+
 def get_reward_funcs(script_args) -> list[Callable]:
     REWARD_FUNCS_REGISTRY = {
         "accuracy": accuracy_reward,
@@ -909,6 +960,10 @@ def get_reward_funcs(script_args) -> list[Callable]:
         ),
         "code_format": get_code_format_reward(language=script_args.code_language),
         "tag_count": tag_count_reward,
+        "offload_count": offload_count_reward,
+        "offload_length": offload_length_reward,
+        "raw_offload_count": raw_offload_count,
+        "raw_offload_avg_len": raw_offload_avg_len,
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 
