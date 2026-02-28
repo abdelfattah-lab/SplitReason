@@ -31,6 +31,8 @@ _import_structure = {
     ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
+    "dapo_config": ["DAPOConfig"],
+    "dapo_trainer": ["DAPOTrainer"],
     "ddpo_config": ["DDPOConfig"],
     "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
@@ -104,6 +106,8 @@ if TYPE_CHECKING:
     )
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
+    from .dapo_config import DAPOConfig
+    from .dapo_trainer import DAPOTrainer
     from .ddpo_config import DDPOConfig
     from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
     from .dpo_trainer import DPOTrainer
