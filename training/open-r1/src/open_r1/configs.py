@@ -169,6 +169,15 @@ class GRPOScriptArguments(trl.ScriptArguments):
         },
     )
 
+    simple_coverage_alpha: float = field(
+        default=1.5,
+        metadata={"help": "Penalty coefficient on coverage when answer is correct (simple_coverage reward)."},
+    )
+    simple_coverage_beta: float = field(
+        default=0.4,
+        metadata={"help": "Bonus coefficient on coverage when answer is incorrect (simple_coverage reward)."},
+    )
+
     dataset_prompt_column: str = field(
         default="prompt",
         metadata={"help": "Column to use as prompts for training."},

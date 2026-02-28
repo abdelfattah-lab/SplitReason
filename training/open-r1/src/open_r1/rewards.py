@@ -881,6 +881,101 @@ async def run_script(script: str, language: str, semaphore: asyncio.Semaphore) -
                 print(f"Error from E2B executor kill with sandbox ID {sandbox.sandbox_id} : {e}")
 
 
+def get_simple_coverage_reward(alpha: float = 1.5, beta: float = 0.4):
+    """Factory for the simple_coverage reward.
+
+    Reward logic per completion:
+      1. Improper formatting (scaffold or bigmodel nesting) → 0.0
+      2. Unparseable gold solution → None (skip example)
+      3. Correct answer   → 2 - coverage * alpha
+      4. Incorrect answer  → 0.1 + coverage * beta
+
+    where *coverage* = fraction of characters inside <bigmodel>…</bigmodel>.
+    """
+    scaffold_pat = re.compile(
+        r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$",
+        flags=re.DOTALL | re.MULTILINE,
+    )
+
+    def simple_coverage_reward(
+        completions: list[list[dict[str, str]]],
+        solution: list[str],
+        **kwargs,
+    ) -> list[Optional[float]]:
+        contents = [
+            completion[0]["content"].replace(
+                "Put your final answer within \\boxed{}", ""
+            )
+            for completion in completions
+        ]
+        rewards: List[Optional[float]] = []
+
+        for content, sol in zip(contents, solution):
+            # 1. Format gate
+            has_scaffold = scaffold_pat.match(content) is not None
+            has_nesting = _has_proper_bigmodel_nesting(content)
+            if not (has_scaffold and has_nesting):
+                rewards.append(0.0)
+                continue
+
+            # 2. Coverage ratio
+            total_chars = len(content)
+            if total_chars == 0:
+                cov = 0.0
+            else:
+                segments = re.findall(
+                    r"<bigmodel>(.*?)</bigmodel>", content, re.DOTALL
+                )
+                bigmodel_chars = sum(len(seg) for seg in segments)
+                cov = bigmodel_chars / total_chars
+
+            # 3. Accuracy check
+            gold_parsed = parse(sol, extraction_mode="first_match")
+            if len(gold_parsed) == 0:
+                rewards.append(None)  # skip unparseable gold
+                print("simple_coverage: failed to parse gold:", sol)
+                continue
+
+            answer_parsed = parse(
+                content,
+                extraction_config=[
+                    LatexExtractionConfig(
+                        normalization_config=NormalizationConfig(
+                            nits=False,
+                            malformed_operators=False,
+                            basic_latex=True,
+                            equations=True,
+                            boxed="all",
+                            units=True,
+                        ),
+                        boxed_match_priority=0,
+                        try_extract_without_anchor=False,
+                    )
+                ],
+                extraction_mode="first_match",
+            )
+
+            try:
+                is_correct = bool(verify(gold_parsed, answer_parsed))
+            except Exception:
+                is_correct = False
+
+            if is_correct:
+                reward = 2.0 - cov * alpha
+            else:
+                reward = 0.1 + cov * beta
+
+            print(
+                f"simple_coverage: correct={is_correct}, cov={cov:.3f}, "
+                f"reward={reward:.3f}"
+            )
+            rewards.append(reward)
+
+        return rewards
+
+    return simple_coverage_reward
+
+
 def _triangle(value: float, peak: float) -> float:
     """Triangle reward: 0 at 0, 1.0 at `peak`, back to 0 at 2*peak, floored at 0."""
     if value <= 0 or value >= 2 * peak:
@@ -964,6 +1059,10 @@ def get_reward_funcs(script_args) -> list[Callable]:
         "offload_length": offload_length_reward,
         "raw_offload_count": raw_offload_count,
         "raw_offload_avg_len": raw_offload_avg_len,
+        "simple_coverage": get_simple_coverage_reward(
+            alpha=script_args.simple_coverage_alpha,
+            beta=script_args.simple_coverage_beta,
+        ),
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 
