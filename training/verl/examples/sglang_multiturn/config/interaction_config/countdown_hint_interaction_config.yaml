@@ -1,0 +1,4 @@
+interaction:
+  - name: "countdown_hint"
+    class_name: "verl.interactions.countdown_hint_interaction.CountdownHintInteraction"
+    config: {}

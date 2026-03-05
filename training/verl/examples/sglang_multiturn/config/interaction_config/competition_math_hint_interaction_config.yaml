@@ -1,0 +1,4 @@
+interaction:
+  - name: "competition_math_hint"
+    class_name: "verl.interactions.competition_math_hint_interaction.CompetitionMathHintInteraction"
+    config: {}

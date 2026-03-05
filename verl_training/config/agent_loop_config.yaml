@@ -1,0 +1,9 @@
+# Agent loop config for speculative reasoning.
+# Loaded by veRL via actor_rollout_ref.rollout.agent.agent_loop_config_path
+#
+# The @register("speculative_reasoning") decorator in speculative_agent_loop.py
+# handles registration, so this file only needs to override the default
+# agent_loop if we want to use YAML-based instantiation instead.
+
+- name: speculative_reasoning
+  _target_: verl_training.speculative_agent_loop.SpeculativeReasoningAgentLoop
