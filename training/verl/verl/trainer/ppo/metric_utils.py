@@ -248,6 +248,23 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
                 if non_abstained.sum() > 0:
                     metrics["abstention/accuracy_non_abstained"] = float(correct_arr[non_abstained].mean())
 
+    # Offload metrics from speculative rollout instrumentation
+    if "bigmodel_segments" in batch.non_tensor_batch:
+        segs = np.array(batch.non_tensor_batch["bigmodel_segments"], dtype=np.float32)
+        metrics["offload/avg_bigmodel_segments"] = float(np.mean(segs))
+        metrics["offload/max_bigmodel_segments"] = float(np.max(segs))
+        metrics["offload/min_bigmodel_segments"] = float(np.min(segs))
+    if "bigmodel_avg_seg_len" in batch.non_tensor_batch:
+        seg_lens = np.array(batch.non_tensor_batch["bigmodel_avg_seg_len"], dtype=np.float32)
+        metrics["offload/avg_bigmodel_seg_len"] = float(np.mean(seg_lens))
+    if "bigmodel_coverage" in batch.non_tensor_batch:
+        cov = np.array(batch.non_tensor_batch["bigmodel_coverage"], dtype=np.float32)
+        metrics["offload/avg_bigmodel_coverage"] = float(np.mean(cov))
+    if "timing_small_s" in batch.non_tensor_batch:
+        metrics["offload/timing_small_s"] = float(np.sum(batch.non_tensor_batch["timing_small_s"]) / max(len(batch.non_tensor_batch["timing_small_s"]), 1))
+        metrics["offload/timing_big_s"] = float(np.sum(batch.non_tensor_batch["timing_big_s"]) / max(len(batch.non_tensor_batch["timing_big_s"]), 1))
+        metrics["offload/timing_probe_s"] = float(np.sum(batch.non_tensor_batch["timing_probe_s"]) / max(len(batch.non_tensor_batch["timing_probe_s"]), 1))
+
     return metrics
 
 
